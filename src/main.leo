@@ -139,7 +139,10 @@ program arcane_amm_v3_0.aleo {
         };
     }
 
-    transition add_amm_liquidity(owner: address, 
+    // current_tick
+    transition add_amm_liquidity(owner: address,
+                                tick_lower: i32,
+                                tick_upper: i32,
                                 token1: arcanetoken.leo/ArcaneToken, 
                                 token1_amount: u128, 
                                 min_token1_amount: u128, 
@@ -916,7 +919,7 @@ program arcane_amm_v3_0.aleo {
         return position_key;
     }
 
-     function update_position(
+     function position_update(
          positionInfo: PositionInfo,
          liquidityDelta: i64,
          feeGrowthInside0X32: u64,
@@ -1192,7 +1195,7 @@ program arcane_amm_v3_0.aleo {
     /// @param upper true for updating a position's upper tick, or false for updating a position's lower tick
     /// @param maxLiquidity The maximum liquidity allocation for a single tick
     /// @return flipped Whether the tick was flipped from initialized to uninitialized, or vice versa
-    inline update_tick_info(
+    inline ticks_update(
         info: TickInfo,
         tick: i32,
         tickCurrent: i32,
