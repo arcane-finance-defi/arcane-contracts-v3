@@ -1,7 +1,7 @@
 import credits.leo;
 import arcanetoken.leo;
 
-program arcane_amm_v2_0.aleo {
+program arcane_amm_v3_0.aleo {
 
     const SELF_ADDRESS: address = aleo1hy8w46tflux7zwpeaw8ny7tq6wkzqux40z75a9ah3q9tqa4t758qltkqu7;
     const MAX_U64: u64 = 18446744073709551615u64;
@@ -25,10 +25,13 @@ program arcane_amm_v2_0.aleo {
         id: field, // hash(token1.id, token2.id)
         token1_id: u64,
         token2_id: u64,
-        reserve1: u128,
-        reserve2: u128,
         lp_total_supply: u128,
         swap_fee: u128, // 10000 based, 1 = 0.01% = 0.0001
+        tick: i32, // the current tick
+        t0_protocol_fees: u128,
+        t1_protocol_fees: u128,
+        tick_spacing: u32,
+        max_liq_per_tick: u64,
     }
 
     struct DepositKey {
@@ -56,6 +59,10 @@ program arcane_amm_v2_0.aleo {
         voucher: field,
     }
 
+    mapping tick_info: field => TickInfo; // TickInfo by hash(pool_key+tick_index, tick)
+    mapping tick_bitmap: field => bool; // tick initialized true/false by hash(pool_key+tick_index, tick)
+    mapping position: field => PositionInfo; // all opened positions key TBD
+
     mapping amm_pools: field => PoolInfo; // PoolInfo by hash(token1.id, token2.id)
     mapping amm_deposits: field => u128; // lp deposit amount by hash(id, pool_key)
     mapping amm_extras: field => ExtraAmount; // extra amount by voucher_id
@@ -70,7 +77,7 @@ program arcane_amm_v2_0.aleo {
         return a < b ? a : b;
     }
 
-    transition create_pool(owner: address, token1: arcanetoken.leo/ArcaneToken, initial_amount1: u128, token2: arcanetoken.leo/ArcaneToken, initial_amount2: u128, swap_fee: u128) -> (PoolAdmin, arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken) {
+    transition create_pool(owner: address, token1: arcanetoken.leo/ArcaneToken, initial_amount1: u128, token2: arcanetoken.leo/ArcaneToken, initial_amount2: u128, swap_fee: u128, tick_spacing: u8) -> (PoolAdmin, arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken) {
         assert(initial_amount1 > 0u128 && initial_amount2 > 0u128);
         assert(swap_fee <= 10000u128); // 10000 based, 1 = 0.01% = 0.0001
         assert(token1.token_id != token2.token_id);
@@ -86,12 +93,14 @@ program arcane_amm_v2_0.aleo {
             pool_key: pool_key
         };
 
-        return (pool_admin, change1, change2) then finalize(pool_key, token1.token_id, initial_amount1, token2.token_id, initial_amount2, swap_fee);
+        return (pool_admin, change1, change2) then finalize(pool_key, token1.token_id, initial_amount1, token2.token_id, initial_amount2, swap_fee, tick_spacing);
     }
 
-    finalize create_pool(pool_key: field, token1_id: u64, token1_amount: u128, token2_id: u64, token2_amount: u128, swap_fee: u128) {
+    finalize create_pool(pool_key: field, token1_id: u64, token1_amount: u128, token2_id: u64, token2_amount: u128, swap_fee: u128, tick_spacing: u8) {
         assert (!Mapping::contains(amm_pools, pool_key)); // the pool already exists
 
+        let price: u128 = token2_amount / token1_amount;
+        let tick: i32 = get_tick_by_price(price);
         let pool: PoolInfo = PoolInfo {
             id: pool_key, // hash(token1.id, token2.id)
             token1_id: token1_id,
@@ -99,10 +108,27 @@ program arcane_amm_v2_0.aleo {
             reserve1: token1_amount,
             reserve2: token2_amount,
             lp_total_supply: token1_amount * token2_amount,
-            swap_fee: swap_fee, // 10000 based, 1 = 0.01% = 0.0001
+            swap_fee: swap_fee, // 10000 based, 1 = 0.01% = 0.0001,
+            tick: tick,
+            token0ProtocolFees: 0u128,
+            token1ProtocolFees: 0u128,
+            tick_spacing: tick_spacing,
+            max_liq_per_tick: get_max_liq_per_tick(tick_spacing)
         };
 
         Mapping::set(amm_pools, pool_key, pool);
+    }
+
+    inline get_max_liq_per_tick(tick_spacing: u8) -> u128 {
+        return 1000000000000u128; // todo
+    }
+
+    inline get_tick_by_price(price: u128) -> i32 {
+        return 0i32; // todo
+    }
+
+    inline get_price_by_tick(tick: i32) -> u128 {
+        return 0u128; // todo
     }
 
     transition transfer_pool_ownership(poolAdmin: PoolAdmin, to: address) -> (PoolAdmin) {
@@ -728,5 +754,531 @@ program arcane_amm_v2_0.aleo {
     // transition get_my_address() -> address {
     //     return arcaneutil.leo/get_caller_address();
     // }
+
+    // ██████████████████████████████████████████████████████████████████████
+    //                                 LiquidityMath
+    // ██████████████████████████████████████████████████████████████████████
+
+    const FP_Q32: u64 = 4294967296u64;
+    const Q32_RESOLUTION: u32 = 32u32;
+
+    const FP_Q24: u64 = 16777216u64;
+    const Q24_RESOLUTION: u32 = 24u32;
+
+    const U64_MAX: u64 = 18446744073709551615u64;
+    const U40_MAX: u64 = 1099511627775u64;
+
+    transition main(a: u64, b: u64) -> u64 {
+        let c: u64 = lm_add_delta(1u64, 1i64);
+        return mul_mod(a, b + c, 123u64);
+    }
+
+    inline gt_u64(x: u64, y: u64) -> u64 {
+        return x > y ? 1u64 : 0u64;
+    }
+
+    inline lt_u64(x: u64, y: u64) -> u64 {
+        return x < y ? 1u64 : 0u64;
+    }
+
+    inline div_rounding_up(x: u64, y: u64) -> u64 {
+        let x_mod_y: u64 = x.mod(y);
+        let gt: u64 = gt_u64(x_mod_y, 0u64);
+        let x_div_y: u64 = x.div(y);
+
+        return x_div_y + gt;
+    }
+
+    inline  mul_mod(a: u64, b: u64, k: u64) -> u64 {
+        let a_128: u128 = a as u128;
+        let b_128: u128 = b as u128;
+        let k_128: u128 = k as u128;
+
+        let product: u128 = a_128.mul(b_128);
+        let mod_u128: u128 = product.mod(k_128);
+        let mod_u64: u64 = mod_u128 as u64;
+
+        return mod_u64;
+    }
+
+    inline mul_div(a: u64, b: u64, k: u64) -> u64 {
+        let a_128: u128 = a as u128;
+        let b_128: u128 = b as u128;
+        let k_128: u128 = k as u128;
+
+        let product: u128 = a_128.mul(b_128);
+        let div_128: u128 = product.div(k_128);
+        let div_u64: u64 = div_128 as u64;
+
+        return div_u64;
+    }
+
+    inline mul_div_rounding_up(
+            a: u64,
+            b: u64,
+            denominator: u64
+        ) -> u64 {
+            let result: u64 = mul_div(a, b, denominator);
+            if (mul_mod(a, b, denominator) > 0u64) {
+                assert(result < U64_MAX);
+                result = result + 1u64;
+            }
+            return result;
+        }
+
+    inline lm_add_delta(x: u64, y: i64) -> u64 {
+        let z: u64 = 0u64;
+        if y < 0i64 {
+            z = x - (y.abs() as u64);
+            assert(z < x);
+        } else {
+            z = x + (y.abs() as u64);
+            assert(z >= x);
+        }
+        return z;
+    }
+
+    inline min_u128(a: u128, b: u128) -> u128 {
+        return a < b ? a : b;
+    }
+
+    inline sqrt_u128(a: u128) -> u128 {
+        if (a == 0u128) {
+            return 0u128;
+        }
+        let result: u128 = 1u128.shl(log2(a) / 2u32);
+
+        result = (result + a / result) >> 1u32;
+        result = (result + a / result) >> 1u32;
+        result = (result + a / result) >> 1u32;
+        result = (result + a / result) >> 1u32;
+        result = (result + a / result) >> 1u32;
+        result = (result + a / result) >> 1u32;
+        result = (result + a / result) >> 1u32;
+        return min_u128(result, a / result);
+    }
+
+    inline log2(value: u128) -> u32 {
+        let result: u32 = 0u32;
+        // if value >> 128u32 > 0u128 {
+        //     value >>= 128u32;
+        //     result += 12832;
+        // }
+        if value >> 64u32 > 0u128 {
+            value >>= 64u32;
+            result += 64u32;
+        }
+        if value >> 32u32 > 0u128 {
+            value >>= 32u32;
+            result += 32u32;
+        }
+        if value >> 16u32 > 0u128 {
+            value >>= 16u32;
+            result += 16u32;
+        }
+        if value >> 8u32 > 0u128 {
+            value >>= 8u32;
+            result += 8u32;
+        }
+        if value >> 4u32 > 0u128 {
+            value >>= 4u32;
+            result += 4u32;
+        }
+        if value >> 2u32 > 0u128 {
+            value >>= 2u32;
+            result += 2u32;
+        }
+        if value >> 1u32 > 0u128 {
+            result += 1u32;
+        }
+        return result;
+    }
+    // ██████████████████████████████████████████████████████████████████████
+    //                                 Position
+    // ██████████████████████████████████████████████████████████████████████
+
+    struct PositionInfo {
+        liquidity: u64,
+        feeGrowthInside0LastX32: u64,
+        feeGrowthInside1LastX32: u64,
+        tokensOwed0: u64,
+        tokensOwed1: u64,
+    }
+
+    struct PositionInfoKey {
+        owned_by: address,
+        tick_lower: i32,
+        tick_upper: i32,
+    }
+
+    function get_position_info_key(owned_by: address, tick_lower: i32, tick_upper: i32) -> field {
+        let position_key: field = BHP256::hash_to_field(PositionInfoKey {owned_by: owned_by, tick_lower: tick_lower, tick_upper: tick_upper});
+        return position_key;
+    }
+
+     function update_position(
+         positionInfo: PositionInfo,
+         liquidityDelta: i64,
+         feeGrowthInside0X32: u64,
+         feeGrowthInside1X32: u64
+         ) -> PositionInfo {
+             let liquidityNext: u64 = 0u64;
+             if (liquidityDelta == 0i64) {
+                 assert(positionInfo.liquidity > 0u64); // disallow pokes for 0 liquidity positions
+                 liquidityNext = positionInfo.liquidity;
+             } else {
+                 let liq_i64: u64 = positionInfo.liquidity;
+                 let ld: u64 =  lm_add_delta(liq_i64, liquidityDelta);
+                 liquidityNext = ld;
+             }
+             let tokensOwed0: u64 =
+                     mul_div(
+                         feeGrowthInside0X32 - positionInfo.feeGrowthInside0LastX32,
+                         positionInfo.liquidity,
+                         FP_Q32
+                     );
+             let tokensOwed1: u64 =
+                     mul_div(
+                         feeGrowthInside1X32 - positionInfo.feeGrowthInside1LastX32,
+                         positionInfo.liquidity,
+                         FP_Q32
+                 );
+             return PositionInfo {
+                liquidity: liquidityNext,
+                feeGrowthInside0LastX32: feeGrowthInside0X32,
+                feeGrowthInside1LastX32: feeGrowthInside1X32,
+                tokensOwed0: positionInfo.tokensOwed0 + tokensOwed0,
+                tokensOwed1: positionInfo.tokensOwed1 + tokensOwed1,
+             };
+         }
+
+    // ██████████████████████████████████████████████████████████████████████
+    //                                 SqrtPriceMath
+    // ██████████████████████████████████████████████████████████████████████
+
+
+    inline getNextSqrtPriceFromAmount0RoundingUp(
+        sqrtPX24: u64,
+        liquidity: u64,
+        amount: u64,
+        add: bool
+    ) -> u64 {
+        // we short circuit amount == 0 because the result is otherwise not guaranteed to equal the input price
+        if (amount == 0u64) {
+            return sqrtPX24;
+        }
+        let numerator1: u64 = liquidity.shl(Q24_RESOLUTION);
+
+        if (add) {
+            let product: u64 = (amount * sqrtPX24) / amount;
+            if (product == sqrtPX24) {
+                let denominator: u64 = numerator1 + product as u64;
+                if (denominator >= numerator1) {
+                    return mul_div_rounding_up(numerator1, sqrtPX24, denominator);
+                }
+            }
+            return div_rounding_up(numerator1, (numerator1 / sqrtPX24).add(amount));
+        } else {
+            let product: u64 = amount * sqrtPX24;
+            // if the product overflows, we know the denominator underflows
+            // in addition, we must check that the denominator does not underflow
+            assert((product / amount) == sqrtPX24);
+            assert(numerator1 > product);
+            let denominator: u64 = numerator1 - product as u64;
+            return mul_div_rounding_up(numerator1, sqrtPX24, denominator);
+        }
+    }
+
+    inline getNextSqrtPriceFromAmount1RoundingDown(
+            sqrtPX24: u64,
+            liquidity: u64,
+            amount: u64,
+            add: bool
+        ) -> u64 {
+            // if we're adding (subtracting), rounding down requires rounding the quotient down (up)
+            // in both cases, avoid a mulDiv for most inputs
+            if (add) {
+                let quotient: u64 =
+                    (
+                        amount <= U40_MAX
+                            ? amount.shl(Q24_RESOLUTION) / liquidity
+                            : mul_div(amount, FP_Q24, liquidity)
+                    );
+                return sqrtPX24 + quotient;
+            } else {
+                let quotient: u64 =
+                    (
+                        amount <= U40_MAX
+                            ? div_rounding_up(amount.shl(Q24_RESOLUTION), liquidity)
+                            : mul_div_rounding_up(amount, FP_Q24, liquidity)
+                    );
+
+                assert(sqrtPX24 > quotient);
+
+                // always fit 40 bits (64 - 24)
+                return sqrtPX24 - quotient;
+            }
+        }
+
+        inline getNextSqrtPriceFromInput(
+                sqrtPX24: u64,
+                liquidity: u64,
+                amountIn: u64,
+                zeroForOne: bool
+            ) -> u64 {
+                assert(sqrtPX24 > 0u64);
+                assert(liquidity > 0u64);
+
+                // round to make sure that we don't pass the target price
+                return zeroForOne
+                        ? getNextSqrtPriceFromAmount0RoundingUp(sqrtPX24, liquidity, amountIn, true)
+                        : getNextSqrtPriceFromAmount1RoundingDown(sqrtPX24, liquidity, amountIn, true);
+        }
+
+        inline getNextSqrtPriceFromOutput(
+                sqrtPX24: u64,
+                liquidity: u64,
+                amountOut: u64,
+                zeroForOne: bool
+            ) -> u64 {
+                assert(sqrtPX24 > 0u64);
+                assert(liquidity > 0u64);
+
+                // round to make sure that we pass the target price
+                return zeroForOne
+                        ? getNextSqrtPriceFromAmount1RoundingDown(sqrtPX24, liquidity, amountOut, false)
+                        : getNextSqrtPriceFromAmount0RoundingUp(sqrtPX24, liquidity, amountOut, false);
+            }
+
+        inline getAmount0Delta_roundUp(
+                sqrtRatioAX24: u64,
+                sqrtRatioBX24: u64,
+                liquidity: u64,
+                roundUp: bool
+            ) -> u64 {
+                if (sqrtRatioAX24 > sqrtRatioBX24) {
+                    let tmp: u64 = sqrtRatioBX24;
+                    sqrtRatioBX24 = sqrtRatioAX24;
+                    sqrtRatioAX24 = tmp;
+                }
+
+                let numerator1: u64 = liquidity.shl(Q24_RESOLUTION);
+                let numerator2: u64 = sqrtRatioBX24 - sqrtRatioAX24;
+
+                assert(sqrtRatioAX24 > 0u64);
+
+                return
+                    roundUp
+                        ? div_rounding_up(
+                            mul_div_rounding_up(numerator1, numerator2, sqrtRatioBX24),
+                            sqrtRatioAX24
+                        )
+                        : mul_div(numerator1, numerator2, sqrtRatioBX24) / sqrtRatioAX24;
+            }
+
+        inline getAmount1Delta_roundUp(
+                sqrtRatioAX24: u64,
+                sqrtRatioBX24: u64,
+                liquidity: u64,
+                roundUp: bool
+            ) -> u64 {
+                if (sqrtRatioAX24 > sqrtRatioBX24) {
+                    let tmp: u64 = sqrtRatioBX24;
+                    sqrtRatioBX24 = sqrtRatioAX24;
+                    sqrtRatioAX24 = tmp;
+                }
+
+                return roundUp ? mul_div_rounding_up(liquidity, sqrtRatioBX24 - sqrtRatioAX24, FP_Q24)
+                        : mul_div(liquidity, sqrtRatioBX24 - sqrtRatioAX24, FP_Q24);
+            }
+
+       inline getAmount0Delta(
+              sqrtRatioAX24: u64,
+              sqrtRatioBX24: u64,
+              liquidity: i64
+          ) -> i64 {
+              return liquidity < 0i64
+                      ? -1i64 * getAmount0Delta_roundUp(sqrtRatioAX24, sqrtRatioBX24, -liquidity as u64, false) as i64
+                      : getAmount0Delta_roundUp(sqrtRatioAX24, sqrtRatioBX24, liquidity as u64, true) as i64;
+          }
+
+       inline getAmount1Delta(
+               sqrtRatioAX24: u64,
+               sqrtRatioBX24: u64,
+               liquidity: i64
+           ) -> i64 {
+               return
+                   liquidity < 0i64
+                       ? -1i64 * getAmount1Delta_roundUp(sqrtRatioAX24, sqrtRatioBX24, -liquidity as u64, false) as i64
+                       : getAmount1Delta_roundUp(sqrtRatioAX24, sqrtRatioBX24, liquidity as u64, true) as i64;
+           }
+
+
+       // ██████████████████████████████████████████████████████████████████████
+       //                                 Ticks
+       // ██████████████████████████████████████████████████████████████████████
+
+       mapping initialized_ticks: i32 => bool;
+
+    // info stored for each initialized individual tick
+    struct TickInfo {
+        // the total position liquidity that references this tick
+        liquidityGross: u64,
+        // amount of net liquidity added (subtracted) when tick is crossed from left to right (right to left),
+        liquidityNet: i64,
+        // fee growth per unit of liquidity on the _other_ side of this tick (relative to the current tick)
+        // only has relative meaning, not absolute — the value depends on when the tick is initialized
+        feeGrowthOutside0X32: u64,
+        feeGrowthOutside1X32: u64,
+        // the cumulative tick value on the other side of the tick
+        tickCumulativeOutside: i64,
+        // the seconds per unit of liquidity on the _other_ side of this tick (relative to the current tick)
+        // only has relative meaning, not absolute — the value depends on when the tick is initialized
+        secondsPerLiquidityOutsideX32: u64,
+        // the seconds spent on the other side of the tick (relative to the current tick)
+        // only has relative meaning, not absolute — the value depends on when the tick is initialized
+        secondsOutside: u32,
+        // true iff the tick is initialized, i.e. the value is exactly equivalent to the expression liquidityGross != 0
+        // these 8 bits are set to prevent fresh sstores when crossing newly initialized ticks
+        initialized: bool
+    }
+
+    inline getFeeGrowthInside(
+            lower: TickInfo,
+            upper: TickInfo,
+            tickLower: i32,
+            tickUpper: i32,
+            tickCurrent: i32,
+            feeGrowthGlobal0X32: u64,
+            feeGrowthGlobal1X32: u64
+        ) -> (u64, u64)  {
+            // calculate fee growth below
+            let feeGrowthBelow0X32: u64 = 0u64;
+            let feeGrowthBelow1X32: u64 = 0u64;
+            if (tickCurrent >= tickLower) {
+                feeGrowthBelow0X32 = lower.feeGrowthOutside0X32;
+                feeGrowthBelow1X32 = lower.feeGrowthOutside1X32;
+            } else {
+                feeGrowthBelow0X32 = feeGrowthGlobal0X32 - lower.feeGrowthOutside0X32;
+                feeGrowthBelow1X32 = feeGrowthGlobal1X32 - lower.feeGrowthOutside1X32;
+            }
+
+            // calculate fee growth above
+            let feeGrowthAbove0X32: u64 = 0u64;
+            let feeGrowthAbove1X32: u64 = 0u64;
+            if (tickCurrent < tickUpper) {
+                feeGrowthAbove0X32 = upper.feeGrowthOutside0X32;
+                feeGrowthAbove1X32 = upper.feeGrowthOutside1X32;
+            } else {
+                feeGrowthAbove0X32 = feeGrowthGlobal0X32 - upper.feeGrowthOutside0X32;
+                feeGrowthAbove1X32 = feeGrowthGlobal1X32 - upper.feeGrowthOutside1X32;
+            }
+
+            let feeGrowthInside0X32: u64 = feeGrowthGlobal0X32 - feeGrowthBelow0X32 - feeGrowthAbove0X32;
+            let feeGrowthInside1X32: u64 = feeGrowthGlobal1X32 - feeGrowthBelow1X32 - feeGrowthAbove1X32;
+
+            return (feeGrowthInside0X32, feeGrowthInside1X32);
+        }
+
+ /// @notice Updates a tick and returns true if the tick was flipped from initialized to uninitialized, or vice versa
+    /// @param self The mapping containing all tick information for initialized ticks
+    /// @param tick The tick that will be updated
+    /// @param tickCurrent The current tick
+    /// @param liquidityDelta A new amount of liquidity to be added (subtracted) when tick is crossed from left to right (right to left)
+    /// @param feeGrowthGlobal0X128 The all-time global fee growth, per unit of liquidity, in token0
+    /// @param feeGrowthGlobal1X128 The all-time global fee growth, per unit of liquidity, in token1
+    /// @param secondsPerLiquidityCumulativeX128 The all-time seconds per max(1, liquidity) of the pool
+    /// @param time The current block timestamp cast to a uint32
+    /// @param upper true for updating a position's upper tick, or false for updating a position's lower tick
+    /// @param maxLiquidity The maximum liquidity allocation for a single tick
+    /// @return flipped Whether the tick was flipped from initialized to uninitialized, or vice versa
+    inline update_tick_info(
+        info: TickInfo,
+        tick: i32,
+        tickCurrent: i32,
+        liquidityDelta: i64,
+        feeGrowthGlobal0X32: u64,
+        feeGrowthGlobal1X32: u64,
+        secondsPerLiquidityCumulativeX32: u64,
+        tickCumulative: i64,
+        time: u32,
+        upper: bool ,
+        maxLiquidity: u64
+    ) -> (TickInfo, bool) {
+        let liquidityGrossBefore: u64 = info.liquidityGross;
+        let liquidityGrossAfter: u64 = lm_add_delta(liquidityGrossBefore, liquidityDelta);
+
+        assert(liquidityGrossAfter <= (maxLiquidity));
+
+        let flipped: bool = ((liquidityGrossAfter == 0u64) != (liquidityGrossBefore == 0u64));
+
+         let info_feeGrowthOutside0X32: u64 = info.feeGrowthOutside0X32;
+         let info_feeGrowthOutside1X32: u64 = info.feeGrowthOutside1X32;
+         let info_secondsPerLiquidityOutsideX32: u64 = info.secondsPerLiquidityOutsideX32;
+         let info_tickCumulativeOutside: i64 = info.tickCumulativeOutside;
+         let info_secondsOutside: u32 = info.secondsOutside;
+         let info_initialized: bool = info.initialized;
+
+        if (liquidityGrossBefore == 0u64) {
+            // by convention, we assume that all growth before a tick was initialized happened _below_ the tick
+            if (tick <= tickCurrent) {
+                info_feeGrowthOutside0X32 = feeGrowthGlobal0X32;
+                info_feeGrowthOutside1X32 = feeGrowthGlobal1X32;
+                info_secondsPerLiquidityOutsideX32 = secondsPerLiquidityCumulativeX32;
+                info_tickCumulativeOutside = tickCumulative;
+                info_secondsOutside = time;
+            }
+            info_initialized = true;
+        }
+
+        let info_liquidityGross: u64 = liquidityGrossAfter;
+
+        // when the lower (upper) tick is crossed left to right (right to left), liquidity must be added (removed)
+        let info_liquidityNet: i64 = upper ? info.liquidityNet.sub(liquidityDelta) : info.liquidityNet.add(liquidityDelta);
+
+        let updated_info: TickInfo = TickInfo {
+                                           liquidityGross: info_liquidityGross,
+                                           liquidityNet: info_liquidityNet,
+                                           feeGrowthOutside0X32: info_feeGrowthOutside0X32,
+                                           feeGrowthOutside1X32: info_feeGrowthOutside1X32,
+                                           tickCumulativeOutside: info_tickCumulativeOutside,
+                                           secondsPerLiquidityOutsideX32: info_secondsPerLiquidityOutsideX32,
+                                           secondsOutside: info_secondsOutside,
+                                           initialized: info_initialized
+                                   };
+        return (updated_info, flipped);
+    }
+
+        /// @notice Transitions to next tick as needed by price movement
+        /// @param self The mapping containing all tick information for initialized ticks
+        /// @param tick The destination tick of the transition
+        /// @param feeGrowthGlobal0X128 The all-time global fee growth, per unit of liquidity, in token0
+        /// @param feeGrowthGlobal1X128 The all-time global fee growth, per unit of liquidity, in token1
+        /// @param secondsPerLiquidityCumulativeX128 The current seconds per liquidity
+        /// @param time The current block.timestamp
+        /// @return liquidityNet The amount of liquidity added (subtracted) when tick is crossed from left to right (right to left)
+        inline cross(
+            info: TickInfo,
+            tick: i32,
+            feeGrowthGlobal0X32: u64,
+            feeGrowthGlobal1X32: u64,
+            secondsPerLiquidityCumulativeX32: u64,
+            tickCumulative: i64,
+            time: u32
+        ) -> (TickInfo, i64) {
+            let updated_info: TickInfo = TickInfo {
+                                liquidityGross: info.liquidityGross,
+                                liquidityNet: info.liquidityNet,
+                                feeGrowthOutside0X32: feeGrowthGlobal0X32 - info.feeGrowthOutside0X32,
+                                feeGrowthOutside1X32: feeGrowthGlobal1X32 - info.feeGrowthOutside1X32,
+                                tickCumulativeOutside: tickCumulative - info.tickCumulativeOutside,
+                                secondsPerLiquidityOutsideX32: secondsPerLiquidityCumulativeX32 - info.secondsPerLiquidityOutsideX32,
+                                secondsOutside: time - info.secondsOutside,
+                                initialized: info.initialized
+            };
+            let liquidityNet: i64 = info.liquidityNet;
+
+            return (updated_info, liquidityNet);
+        }
 
 }
