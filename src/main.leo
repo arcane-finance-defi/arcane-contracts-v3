@@ -6,6 +6,9 @@ program arcane_amm_v3_0.aleo {
     const SELF_ADDRESS: address = aleo1hy8w46tflux7zwpeaw8ny7tq6wkzqux40z75a9ah3q9tqa4t758qltkqu7;
     const MAX_U64: u64 = 18446744073709551615u64;
 
+    const MIN_TICK: i32 = -887272i32;
+    const MAX_TICK: i32 = 887272i32;
+
     /// ██████████████████████████████████████████████████████████████████████
     ///                             Private AMM Swaps
     /// ██████████████████████████████████████████████████████████████████████
@@ -30,6 +33,8 @@ program arcane_amm_v3_0.aleo {
         lp_total_supply: u128,
         swap_fee: u128, // 10000 based, 1 = 0.01% = 0.0001
         tick: i32, // the current tick
+        sqrt_price_x24: u64,
+        liquidity: u64,
         t0_protocol_fees: u128,
         t1_protocol_fees: u128,
         tick_spacing: u8,
@@ -110,6 +115,8 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: token1_amount * token2_amount,
             swap_fee: swap_fee, // 10000 based, 1 = 0.01% = 0.0001,
             tick: tick,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: tick_spacing,
@@ -185,6 +192,8 @@ program arcane_amm_v3_0.aleo {
             reserve2: pool.reserve2 + token2_amount,
             lp_total_supply: pool.lp_total_supply + lp,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -260,6 +269,8 @@ program arcane_amm_v3_0.aleo {
             reserve2: pool.reserve2 - deposit_amount_2,
             lp_total_supply: pool.lp_total_supply - deposit_amount_lp,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -324,6 +335,8 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: pool.lp_total_supply,
             swap_fee: pool.swap_fee,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -379,6 +392,8 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: token1_amount * token2_amount,
             swap_fee: swap_fee, // 10000 based, 1 = 0.01% = 0.0001
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -430,6 +445,8 @@ program arcane_amm_v3_0.aleo {
             reserve2: pool.reserve2 + token2_amount,
             lp_total_supply: pool.lp_total_supply + lp,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -505,6 +522,8 @@ program arcane_amm_v3_0.aleo {
             reserve2: pool.reserve2 - deposit_amount_2,
             lp_total_supply: pool.lp_total_supply - deposit_amount_lp,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -571,6 +590,8 @@ program arcane_amm_v3_0.aleo {
             reserve2: pool.token2_id == token_in_id ? reserve_in_new : reserve_out_new,
             lp_total_supply: pool.lp_total_supply,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -638,6 +659,8 @@ program arcane_amm_v3_0.aleo {
             reserve2: pool.token2_id == token_in_id ? reserve_in_new : reserve_out_new,
             lp_total_supply: pool.lp_total_supply,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -704,6 +727,8 @@ program arcane_amm_v3_0.aleo {
             reserve2: pool.token2_id == token_in_id ? reserve_in_new : reserve_out_new,
             lp_total_supply: pool.lp_total_supply,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -751,6 +776,8 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: reserve1 * reserve2,
             swap_fee: 10u128, // 10000 based, 1 = 0.01% = 0.0001
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -771,6 +798,8 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: reserve1 * reserve3,
             swap_fee: 10u128, // 10000 based, 1 = 0.01% = 0.0001
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -790,6 +819,8 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: reserve1 * reserve4,
             swap_fee: 10u128,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -809,6 +840,8 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: reserve2 * reserve3,
             swap_fee: 10u128,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -828,6 +861,8 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: reserve2 * reserve4,
             swap_fee: 10u128,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -847,6 +882,8 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: reserve3 * reserve4,
             swap_fee: 10u128,
             tick: 0i32,
+            sqrt_price_x24: 0u64,
+            liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
             tick_spacing: 0u8,
@@ -1096,6 +1133,96 @@ program arcane_amm_v3_0.aleo {
        };
     }
 
+    struct ModifyPositionParams {
+        orig_position: PositionInfo,
+        tick_lower: i32,
+        tick_upper: i32,
+        lower_tick_info: TickInfo,
+        upper_tick_info: TickInfo,
+        liquidity_delta: i64,
+        pool_info: PoolInfo,
+    }
+
+
+    struct ModifyPositionResult {
+        update_position_result: UpdatePositionResult,
+        token1_amount: i64,
+        token2_amount: i64,
+        liquidity_after: u64
+    }
+
+    inline check_ticks(lower: i32, upper: i32) {
+        assert(lower < upper);
+        assert(lower >= MIN_TICK);
+        assert(upper <= MAX_TICK);
+    }
+
+    /// @dev Effect some changes to a position
+    /// @param params the position details and the change to the position's liquidity to effect
+    /// @return position a storage pointer referencing the position with the given owner and tick range
+    /// @return amount1 the amount of token1 owed to the pool, negative if the pool should pay the recipient
+    /// @return amount2 the amount of token2 owed to the pool, negative if the pool should pay the recipient
+    inline modify_position(params: ModifyPositionParams) -> ModifyPositionResult {
+        check_ticks(params.tick_lower, params.tick_upper);
+
+        let token1_amount: i64 = 0i64;
+        let token2_amount: i64 = 0i64;
+        let liquidity_after: u64 = params.pool_info.liquidity;
+
+        let update_position_result: UpdatePositionResult = update_position(
+            params.orig_position,
+            params.tick_lower,
+            params.tick_upper,
+            params.liquidity_delta,
+            params.lower_tick_info,
+            params.upper_tick_info,
+            params.pool_info
+        );
+
+        if (params.liquidity_delta != 0i64) {
+            if (params.pool_info.tick < params.tick_lower) {
+                // current tick is below the passed range; liquidity can only become in range by crossing from left to
+                // right, when we'll need _more_ token0 (it's becoming more valuable) so user must provide it
+                token1_amount = getAmount0Delta(
+                    getSqrtRatioAtTick(params.tick_lower),
+                    getSqrtRatioAtTick(params.tick_upper),
+                    params.liquidity_delta
+                );
+            } else if (params.pool_info.tick < params.tick_upper) {
+                // current tick is inside the passed range
+                let liquidity_before: u64 = params.pool_info.liquidity;
+
+                token1_amount = getAmount0Delta(
+                    params.pool_info.sqrt_price_x24,
+                    getSqrtRatioAtTick(params.tick_upper),
+                    params.liquidity_delta
+                );
+                token2_amount = getAmount1Delta(
+                    getSqrtRatioAtTick(params.tick_lower),
+                    params.pool_info.sqrt_price_x24,
+                    params.liquidity_delta
+                );
+
+                liquidity_after = lm_add_delta(liquidity_before, params.liquidity_delta);
+            } else {
+                // current tick is above the passed range; liquidity can only become in range by crossing from right to
+                // left, when we'll need _more_ token1 (it's becoming more valuable) so user must provide it
+                token2_amount = getAmount1Delta(
+                    getSqrtRatioAtTick(params.tick_lower),
+                    getSqrtRatioAtTick(params.tick_upper),
+                    params.liquidity_delta
+                );
+            }
+        }
+
+        return ModifyPositionResult {
+               update_position_result: update_position_result,
+               token1_amount: token1_amount,
+               token2_amount: token2_amount,
+               liquidity_after: liquidity_after
+        };
+    }
+
     struct UpdatePositionResult {
         modified_position: PositionInfo,
         effect_update_lower_tick: EffectUpdateTickInfo,
@@ -1111,11 +1238,12 @@ program arcane_amm_v3_0.aleo {
         tick_lower: i32,
         tick_upper: i32,
         liquidity_delta: i64,
-        tick: i32,
         lower_tick_info: TickInfo,
         upper_tick_info: TickInfo,
         pool_info: PoolInfo,
     ) -> UpdatePositionResult {
+        let tick: i32 = pool_info.tick; // current tick
+
         // result items start
         let flipped_lower: bool = false;
         let flipped_upper: bool = false;
@@ -1554,4 +1682,11 @@ program arcane_amm_v3_0.aleo {
             return (updated_info, liquidityNet);
         }
 
+       // ██████████████████████████████████████████████████████████████████████
+       //                                 Tick Math
+       // ██████████████████████████████████████████████████████████████████████
+
+    inline getSqrtRatioAtTick(tick: i32) -> u64 {
+        return tick.abs() as u64; // todo
+    }
 }
