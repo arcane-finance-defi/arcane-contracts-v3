@@ -19,6 +19,12 @@ program arcane_amm_v3_0.aleo {
         token2: u64,
     }
 
+    struct PoolTickKey {
+        token1: u64,
+        token2: u64,
+        tick: i32
+    }
+
     record PoolAdmin {
         owner: address,
         pool_key: field
@@ -40,7 +46,8 @@ program arcane_amm_v3_0.aleo {
         tick_spacing: u8,
         max_liq_per_tick: u64,
         feeGrowthGlobal0X32: u64,
-        feeGrowthGlobal1X32: u64
+        feeGrowthGlobal1X32: u64,
+        feeProtocol: u8, // the current protocol fee as a percentage of the swap fee taken on withdrawal; represented as an integer denominator (1/x)%
     }
 
     struct DepositKey {
@@ -63,13 +70,13 @@ program arcane_amm_v3_0.aleo {
     }
 
     record ExtraAmountVoucher {
-        owner: address,
-        token_id: u64,
-        voucher: field,
+             owner: address,
+             token_id: u64,
+             voucher: field,
     }
 
-    mapping tick_info_mapping: field => TickInfo; // TickInfo by hash(pool_key+tick_index, tick)
-    mapping tick_bitmap_mapping: field => bool; // tick initialized true/false by hash(pool_key+tick_index, tick)
+    mapping tick_info_mapping: field => TickInfo; // TickInfo by hash(pool_tick_key)
+    mapping tick_bitmap_mapping: field => bool; // tick initialized true/false by hash(pool_tick_key)
     mapping position_mapping: field => PositionInfo; // all opened positions key TBD
 
     mapping amm_pools: field => PoolInfo; // PoolInfo by hash(token1.id, token2.id)
@@ -80,6 +87,12 @@ program arcane_amm_v3_0.aleo {
         let actual_token1: u64 = token1 > token2 ? token2 : token1;
         let actual_token2: u64 = token1 <= token2 ? token2 : token1;
         return BHP256::hash_to_field(PoolKey {token1: actual_token1, token2: actual_token2});
+    }
+
+    inline get_pool_tick_key(token1: u64, token2: u64, tick: i32) -> field {
+        let actual_token1: u64 = token1 > token2 ? token2 : token1;
+        let actual_token2: u64 = token1 <= token2 ? token2 : token1;
+        return BHP256::hash_to_field(PoolTickKey {token1: actual_token1, token2: actual_token2, tick: tick});
     }
 
     transition create_pool(owner: address, token1: arcanetoken.leo/ArcaneToken, initial_amount1: u128, token2: arcanetoken.leo/ArcaneToken, initial_amount2: u128, swap_fee: u128, tick_spacing: u8) -> (PoolAdmin, arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken) {
@@ -115,7 +128,7 @@ program arcane_amm_v3_0.aleo {
             lp_total_supply: token1_amount * token2_amount,
             swap_fee: swap_fee, // 10000 based, 1 = 0.01% = 0.0001,
             tick: tick,
-            sqrt_price_x24: 0u64,
+            sqrt_price_x24: 0u64, // todo pass from front?
             liquidity: 0u64,
             t0_protocol_fees: 0u128,
             t1_protocol_fees: 0u128,
@@ -136,8 +149,8 @@ program arcane_amm_v3_0.aleo {
         return 0i32; // todo
     }
 
-    inline get_price_by_tick(tick: i32) -> u128 {
-        return 0u128; // todo
+    inline get_price_by_tick(tick: i32) -> u64 {
+        return 0u64; // todo
     }
 
     transition transfer_pool_ownership(poolAdmin: PoolAdmin, to: address) -> (PoolAdmin) {
@@ -282,71 +295,29 @@ program arcane_amm_v3_0.aleo {
         Mapping::remove(amm_deposits, deposit_id);
     }
 
-    transition swap_amm(receiver: address, token_in: arcanetoken.leo/ArcaneToken, amount_in: u128, token_out_id: u64, amount_out: u128, extra_voucher: field) -> (arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken, ExtraAmountVoucher) {
+    transition swap_amm(exact_input: bool, receiver: address, token_in: arcanetoken.leo/ArcaneToken, amount_in: u128, token_out_id: u64, amount_out: u128, sqrt_price_limit_x24: u64, extra_voucher_in: field, extra_voucher_out: field) -> (arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken, ExtraAmountVoucher) {
         assert(amount_out > 0u128);
 
         let change: ArcaneToken = arcanetoken.leo/transfer_private_to_public_arc(token_in, SELF_ADDRESS, amount_in);
         let token_out: ArcaneToken = arcanetoken.leo/transfer_public_to_private_arc(token_out_id, receiver, amount_out);
 
+        // user can get change using this voucher if amount_in is less than actual amount they could swap
+        let extra_amount_voucher_in: ExtraAmountVoucher = ExtraAmountVoucher {
+            owner: receiver,
+            token_id: token_in_id,
+            voucher: extra_voucher_in
+        };
+
         // user can get change using this voucher if amount_out is less than actual amount they could receive according to AMM math
-        let extra_amount_voucher: ExtraAmountVoucher = ExtraAmountVoucher {
+        let extra_amount_voucher_out: ExtraAmountVoucher = ExtraAmountVoucher {
             owner: receiver,
             token_id: token_out_id,
-            voucher: extra_voucher
+            voucher: extra_voucher_out
         };
 
-        return (change, token_out, extra_amount_voucher) then finalize(token_in.token_id, amount_in, token_out_id, amount_out, extra_voucher);
+        return (change, token_out, extra_amount_voucher_in, extra_amount_voucher_out) then finalize(exact_input, token_in.token_id, amount_in, token_out_id, amount_out, sqrt_price_limit_x24, extra_voucher_in, extra_voucher_out);
     }
 
-    finalize swap_amm(token_in_id: u64, amount_in: u128, token_out_id: u64, amount_out: u128, extra_change_voucher: field) {
-        let pool_key: field = get_pool_key(token_in_id, token_out_id);
-        let pool: PoolInfo = Mapping::get(amm_pools, pool_key);
-
-        let total: u128 = pool.lp_total_supply;
-
-        let reserve_in: u128 = pool.token1_id == token_in_id ? pool.reserve1 : pool.reserve2;
-        let reserve_out: u128 = pool.token2_id == token_in_id ? pool.reserve1 : pool.reserve2;
-
-        let fee: u128 = pool.swap_fee;
-
-        let amount_in_with_fee: u128 = amount_in * (10000u128 - fee);
-        let actual_amount_out: u128 = amount_in_with_fee * reserve_out / (reserve_in * 10000u128 + amount_in_with_fee);
-        assert(actual_amount_out >= amount_out);
-
-        // Return change
-        let extra_change: u128 = actual_amount_out - amount_out;
-
-        let extra_amount: ExtraAmount = ExtraAmount {
-            token_id: token_out_id,
-            token_amount: extra_change,
-        };
-        Mapping::set(amm_extras, extra_change_voucher, extra_amount);
-
-        // Update pool
-        let reserve_in_new: u128 = reserve_in + amount_in;
-        let reserve_out_new: u128 = reserve_out - actual_amount_out;
-
-        let updated_pool: PoolInfo = PoolInfo {
-            id: pool.id,
-            token1_id: pool.token1_id,
-            token2_id: pool.token2_id,
-            reserve1: pool.token1_id == token_in_id ? reserve_in_new : reserve_out_new,
-            reserve2: pool.token2_id == token_in_id ? reserve_in_new : reserve_out_new,
-            lp_total_supply: pool.lp_total_supply,
-            swap_fee: pool.swap_fee,
-            tick: 0i32,
-            sqrt_price_x24: 0u64,
-            liquidity: 0u64,
-            t0_protocol_fees: 0u128,
-            t1_protocol_fees: 0u128,
-            tick_spacing: 0u8,
-            max_liq_per_tick: 0u64,
-            feeGrowthGlobal0X32: 0u64,
-            feeGrowthGlobal1X32: 0u64
-        };
-
-        Mapping::set(amm_pools, pool_key, updated_pool);
-    }
 
     transition redeem_voucher(voucher: ExtraAmountVoucher, amount: u128) -> (arcanetoken.leo/ArcaneToken) {
         let token: ArcaneToken = arcanetoken.leo/transfer_public_to_private_arc(voucher.token_id, voucher.owner, amount);
@@ -1606,7 +1577,6 @@ program arcane_amm_v3_0.aleo {
     /// @param liquidityDelta A new amount of liquidity to be added (subtracted) when tick is crossed from left to right (right to left)
     /// @param feeGrowthGlobal0X128 The all-time global fee growth, per unit of liquidity, in token0
     /// @param feeGrowthGlobal1X128 The all-time global fee growth, per unit of liquidity, in token1
-    /// @param secondsPerLiquidityCumulativeX128 The all-time seconds per max(1, liquidity) of the pool
     /// @param time The current block timestamp cast to a uint32
     /// @param upper true for updating a position's upper tick, or false for updating a position's lower tick
     /// @param maxLiquidity The maximum liquidity allocation for a single tick
@@ -1661,15 +1631,13 @@ program arcane_amm_v3_0.aleo {
         /// @param tick The destination tick of the transition
         /// @param feeGrowthGlobal0X128 The all-time global fee growth, per unit of liquidity, in token0
         /// @param feeGrowthGlobal1X128 The all-time global fee growth, per unit of liquidity, in token1
-        /// @param secondsPerLiquidityCumulativeX128 The current seconds per liquidity
         /// @param time The current block.timestamp
         /// @return liquidityNet The amount of liquidity added (subtracted) when tick is crossed from left to right (right to left)
         inline cross(
             info: TickInfo,
-            tick: i32,
             feeGrowthGlobal0X32: u64,
             feeGrowthGlobal1X32: u64
-        ) -> (TickInfo, i64) {
+        ) -> TickInfo {
             let updated_info: TickInfo = TickInfo {
                                 liquidityGross: info.liquidityGross,
                                 liquidityNet: info.liquidityNet,
@@ -1677,9 +1645,7 @@ program arcane_amm_v3_0.aleo {
                                 feeGrowthOutside1X32: feeGrowthGlobal1X32 - info.feeGrowthOutside1X32,
                                 initialized: info.initialized
             };
-            let liquidityNet: i64 = info.liquidityNet;
-
-            return (updated_info, liquidityNet);
+            return updated_info;
         }
 
        // ██████████████████████████████████████████████████████████████████████
@@ -1791,4 +1757,256 @@ program arcane_amm_v3_0.aleo {
                 feeAmount: feeAmount
         };
     }
+
+    struct SwapCache {
+        // the protocol fee for the input token
+        feeProtocol: u8,
+        // liquidity at the beginning of the swap
+        liquidityStart: u64
+    }
+
+    finalize swap_amm(exact_input: bool, token_in_id: u64, amount_in: u128, token_out_id: u64, amount_out: u128, sqrt_price_limit_x24: u64, extra_change_voucher_in: field, extra_change_voucher_out: field) {
+        let pool_key: field = get_pool_key(token_in_id, token_out_id);
+        let pool_info: PoolInfo = Mapping::get(amm_pools, pool_key);
+
+        let zeroForOne = token_in_id > token_out_id;
+        let amountSpecified: u64 = zeroForOne ? : ;
+
+        assert(
+            zeroForOne
+                ? sqrt_price_limit_x24 < pool_info.sqrt_price_x24 // && sqrt_price_limit_x24 > TickMath.MIN_SQRT_RATIO todo MIN/MAX sqrt ratio
+                : sqrt_price_limit_x24 > pool_info.sqrt_price_x24 // && sqrt_price_limit_x24 < TickMath.MAX_SQRT_RATIO
+        );
+
+        let cache: SwapCache =
+            SwapCache {
+                liquidityStart: pool_info.liquidity,
+                feeProtocol: zeroForOne ? (pool_info.feeProtocol % 16u8) : (pool_info.feeProtocol >> 4u8)
+            };
+
+        let state_amountSpecifiedRemaining: i64 = amountSpecified as i64;
+        let state_amountCalculated: u64 = 0u64,
+        let state_sqrt_price_x24: u64 = pool_info.sqrt_price_x24;
+        let state_tick: i32 = pool_info.tick;
+        let state_feeGrowthGlobalX128: u64 = zeroForOne ? feeGrowthGlobal0X128 : feeGrowthGlobal1X128;
+        let state_protocolFee: u8 = 0u8;
+        let state_liquidity: u64 = cache.liquidityStart;
+
+        for i: u32 in 0u32..10u32 {
+            // continue swapping as long as we haven't used the entire input/output and haven't reached the price limit
+            let finished: bool = (state_amountSpecifiedRemaining == 0i64 || state_sqrt_price_x24 == sqrt_price_limit_x24);
+            if (!finished) {
+                 let step_sqrtPriceStartX24: u64 = state_sqrt_price_x24;
+                 let step_tickNext: i32 = 0i32;
+                 let step_initialized: bool = false;
+                 let step_sqrtPriceNextX24: u64 = 0u64;
+                 let step_amountIn: u64 = 0u64;
+                 let step_amountOut: u64 = 0u64;
+                 let step_feeAmount: u64 = 0u64;
+
+                 let tick_to_check: i32 = state_tick;
+                 let found_initialized_tick: bool = false;
+                 for j: u32 in 0u32..256u32 {
+                     if (!found_initialized_tick) {
+                         tick_to_check = zeroForOne ? tick_to_check - pool_info.tick_spacing : tick_to_check + pool_info.tick_spacing;
+                         let key = get_pool_tick_key(pool_info.token1, pool_info.token2, tick_to_check);
+                         let tick_initialized: bool = Mapping::get(tick_bitmap_mapping, pool_tick_key);
+                         if (tick_initialized && !found_initialized_tick) {
+                             found_initialized_tick = true;
+                             step_tickNext = tick_to_check;
+                             step_initialized = true;
+                         }
+                     }
+                 }
+                 if (!found_initialized_tick) {
+                     step_tickNext = tick_to_check;
+                     step_initialized = false;
+                 }
+
+                 // ensure that we do not overshoot the min/max tick, as the tick bitmap is not aware of these bounds
+                 if (step_tickNext < MIN_TICK) {
+                     step_tickNext = MIN_TICK;
+                 } else if (step_tickNext > MAX_TICK) {
+                     step_tickNext = MAX_TICK;
+                 }
+
+                 // get the price for the next tick
+                 step_sqrtPriceNextX24 = getSqrtRatioAtTick(step_tickNext);
+
+                 // compute values to swap to the target tick, price limit, or point where input/output amount is exhausted
+
+                 let swap_step_result: ComputeSwapStepResult = computeSwapStep(
+                     state_sqrt_price_x24,
+                     (zeroForOne ? step_sqrtPriceNextX24 < sqrt_price_limit_x24 : step_sqrtPriceNextX24 > sqrt_price_limit_x24)
+                         ? sqrt_price_limit_x24
+                         : step_step_sqrtPriceNextX24,
+                     state_liquidity,
+                     state_amountSpecifiedRemaining,
+                     fee
+                 );
+                 state_sqrt_price_x24 = swap_step_result.sqrtRatioNextX96;
+                 step_amountIn = swap_step_result.amountIn;
+                 step_amountOut = swap_step_result.amountOut;
+                 step_feeAmount = swap_step_result.feeAmount;
+
+                if (exactInput) {
+                    state_amountSpecifiedRemaining = state_amountSpecifiedRemaining - (step.amountIn + step.feeAmount);
+                    state_amountCalculated = state_amountCalculated.sub(step_amountOut);
+                } else {
+                    state_amountSpecifiedRemaining = state_amountSpecifiedRemaining + step_amountOut;
+                    state_amountCalculated = state_amountCalculated.add(step_amountIn + step_feeAmount);
+                }
+
+                 // if the protocol fee is on, calculate how much is owed, decrement feeAmount, and increment protocolFee
+                 if (cache.feeProtocol > 0) {
+                     let delta: u64 = step_feeAmount / cache.feeProtocol;
+                     step_feeAmount -= delta;
+                     state_protocolFee += uint128(delta);
+                 }
+
+                 // update global fee tracker
+                 if (state_liquidity > 0i64) {
+                    state_feeGrowthGlobalX128 = state_feeGrowthGlobalX128 + mul_div(step_feeAmount, FP_Q32, state_liquidity);
+                 }
+
+                 // shift tick if we reached the next price
+                 if (state_sqrt_price_x24 == step_sqrtPriceNextX24) {
+                     // if the tick is initialized, run the tick transition
+                     if (step_initialized) {
+                         // check for the placeholder value, which we replace with the actual value the first time the swap
+                         // crosses an initialized tick
+                         let pool_tick_key = get_pool_tick_key(pool_info.token1, pool_info.token2, step_tickNext);
+                         let next_tick_info = Mapping::get(tick_info_mapping, pool_tick_key);
+
+                         let updated_next_tick_info = cross(
+                                 next_tick_info,
+                                 (zeroForOne ? state_feeGrowthGlobalX128 : pool_info.feeGrowthGlobal0X128),
+                                 (zeroForOne ? pool_info.feeGrowthGlobal1X128 : state_feeGrowthGlobalX128)
+                             );
+                         let liquidityNet: i64 = updated_next_tick_info.liquidityNet;
+                         Mapping::set(tick_info_mapping, pool_tick_key, updated_next_tick_info);
+
+                         // if we're moving leftward, we interpret liquidityNet as the opposite sign
+                         // safe because liquidityNet cannot be type(int128).min
+                         if (zeroForOne) {
+                            liquidityNet = -liquidityNet;
+                         }
+                         state_liquidity = lm_add_delta(state_liquidity, liquidityNet);
+                     }
+                     state_tick = zeroForOne ? step_tickNext - 1 : step_tickNext;
+                 } else if (state_sqrt_price_x24 != step_sqrt_price_start_x24) {
+                     // recompute unless we're on a lower tick boundary (i.e. already transitioned ticks), and haven't moved
+                     state_tick = getTickAtSqrtRatio(state_sqrt_price_x24);
+                 }
+            }
+        }
+
+        let pool_info_sqrt_price_x24: u64 = pool_info.sqrt_price_x24;
+        let pool_info_tick: i32 = pool_info.tick;
+        let pool_info_liquidity: u64 = pool_info.liquidity;
+        let pool_info_feeGrowthGlobal0X128: u64 = pool_info.feeGrowthGlobal0X128;
+        let pool_info_feeGrowthGlobal1X128: u64 = pool_info.feeGrowthGlobal1X128;
+        let pool_info_t0_protocol_fees: u64 = pool_info.t0_protocol_fees;
+        let pool_info_t1_protocol_fees: u64 = pool_info.t1_protocol_fees;
+
+        // update tick and write an oracle entry if the tick change
+        if (state_tick != pool_info.tick) {
+            pool_info_sqrt_price_x24 = state_sqrt_price_x24;
+            pool_info_tick = state_tick;
+        } else {
+            // otherwise just update the price
+            pool_info_sqrt_price_x24 = state_sqrt_price_x24;
+        }
+
+        // update liquidity if it changed
+        if (cache.liquidityStart != state_liquidity) {
+            pool_info_liquidity = state_liquidity;
+        }
+
+        // update fee growth global and, if necessary, protocol fees
+        // overflow is acceptable, protocol has to withdraw before it hits type(uint128).max fees
+        if (zeroForOne) {
+            pool_info_feeGrowthGlobal0X128 = state_feeGrowthGlobalX128;
+            if (state_protocolFee > 0) {
+                 pool_info_t0_protocol_fees = pool_info_t0_protocol_fees + state_protocolFee;
+            }
+        } else {
+            pool_info_feeGrowthGlobal1X128 = state_feeGrowthGlobalX128;
+            if (state_protocolFee > 0) {
+                pool_info_t1_protocol_fees = pool_info_t1_protocol_fees + state_protocolFee;
+            }
+        }
+
+        let pool_key: field = get_pool_key(pool_info.token1, pool_info.token2);
+        let updated_pool_info: PoolInfo = PoolInfo {
+                    id: pool_info.id,
+                    token1_id: pool_info.token1_id,
+                    token2_id: pool_info.token2_id,
+                    swap_fee: pool_info.swap_fee,
+                    reserve1: pool_info.reserve1,
+                    reserve2: pool_info.reserve2,
+                    lp_total_supply: pool_info.lp_total_supply,
+                    tick: pool_info_tick,
+                    sqrt_price_x24: pool_info_sqrt_price_x24,
+                    liquidity: pool_info_liquidity,
+                    t0_protocol_fees: pool_info_t0_protocol_fees,
+                    t1_protocol_fees: pool_info_t1_protocol_fees,
+                    tick_spacing: pool_info.tick_spacing,
+                    max_liq_per_tick: pool_info.max_liq_per_tick,
+                    feeGrowthGlobal0X32: pool_info_feeGrowthGlobal0X128,
+                    feeGrowthGlobal1X32: pool_info_feeGrowthGlobal1X128
+                };
+        Mapping::set(amm_pools, pool_key, updated_ppl_info);
+
+
+        let amount0: i64 = (zeroForOne == exactInput) ? (amountSpecified - state_amountSpecifiedRemaining) : state_amountCalculated;
+        let amount1: i64 = (zeroForOne == exactInput) ? state_amountCalculated : (amountSpecified - state_amountSpecifiedRemaining);
+
+        if (zeroForOne) {
+            // amount0 is amount_in
+            // amount1 amount_out
+            if (amount1 < 0i64) {
+                // todo transfer abs(amount1) to recipient
+                assert(amount_out <= abs(amount1));
+                // Return token out change
+                let extra_change_out: u128 = abs(amount1) - amount_out;
+                let extra_amount_out: ExtraAmount = ExtraAmount {
+                    token_id: token_out_id,
+                    token_amount: extra_change_out,
+                };
+                Mapping::set(amm_extras, extra_change_voucher_out, extra_amount_out);
+            }
+            assert(amount0 <= amount_in);
+            // Return token out change
+            let extra_change_in: u128 = amount_in - amount0;
+            let extra_amount_in: ExtraAmount = ExtraAmount {
+                token_id: token_in_id,
+                token_amount: extra_change_in,
+            };
+            Mapping::set(amm_extras, extra_change_voucher_in, extra_amount_in);
+        } else {
+            // amount0 is amount_out
+            // amount1 is amount_in
+            if (amount0 < 0i64) {
+                // todo transfer abs(amount1) to recipient
+                assert(amount_out <= abs(amount0));
+                // Return token out change
+                let extra_change_out: u128 = abs(amount0) - amount_out;
+                let extra_amount_out: ExtraAmount = ExtraAmount {
+                    token_id: token_out_id,
+                    token_amount: extra_change_out,
+                };
+                Mapping::set(amm_extras, extra_change_voucher_out, extra_amount_out);
+            }
+            assert(amount1 <= amount_in);
+            // Return token out change
+            let extra_change_in: u128 = amount_in - amount1;
+            let extra_amount_in: ExtraAmount = ExtraAmount {
+                token_id: token_in_id,
+                token_amount: extra_change_in,
+            };
+            Mapping::set(amm_extras, extra_change_voucher_in, extra_amount_in);
+        }
+    }
+
 }
