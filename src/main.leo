@@ -526,7 +526,7 @@ program arcane_amm_v3_0.aleo {
         let state_sqrt_price_x24: u64 = pool_state.sqrt_price_x24;
         let state_tick: i32 = pool_state.tick;
         let state_feeGrowthGlobalX128: u64 = zeroForOne ? feeGrowthGlobal0X128 : feeGrowthGlobal1X128;
-        let state_protocolFee: u8 = 0u8;
+        let state_protocolFee: u64 = 0u64;
         let state_liquidity: u64 = liquidityStart;
 
         for i: u32 in 0u32..10u32 {
@@ -586,7 +586,7 @@ program arcane_amm_v3_0.aleo {
                  step_amountOut = swap_step_result.amountOut;
                  step_feeAmount = swap_step_result.feeAmount;
 
-                if (exactInput) {
+                if (exact_input) {
                     state_amountSpecifiedRemaining = state_amountSpecifiedRemaining - (step.amountIn + step.feeAmount);
                     state_amountCalculated = state_amountCalculated.sub(step_amountOut);
                 } else {
@@ -596,9 +596,9 @@ program arcane_amm_v3_0.aleo {
 
                  // if the protocol fee is on, calculate how much is owed, decrement feeAmount, and increment protocolFee
                  if (swap_fee > 0u64) {
-                     let delta: u64 = step_feeAmount / swap_fee; // todo fee calculation
+                     let delta: u64 = step_feeAmount / swap_fee as u64; // todo fee calculation
                      step_feeAmount = step_feeAmount - delta;
-                     state_protocolFee += state_protocolFee + delta;
+                     state_protocolFee = state_protocolFee + delta;
                  }
 
                  // update global fee tracker
@@ -631,9 +631,9 @@ program arcane_amm_v3_0.aleo {
                          state_liquidity = lm_add_delta(state_liquidity, liquidityNet);
                      }
                      state_tick = zeroForOne ? step_tickNext - 1i32 : step_tickNext;
-                 } else if (state_sqrt_price_x24 != step_sqrt_price_start_x24) {
+                 } else if (state_sqrt_price_x24 != step_sqrtPriceStartX24) {
                      // recompute unless we're on a lower tick boundary (i.e. already transitioned ticks), and haven't moved
-                     state_tick = getTickAtSqrtRatio(state_sqrt_price_x24);
+                     state_tick = get_tick_by_price(state_sqrt_price_x24);
                  }
             }
         }
@@ -664,17 +664,16 @@ program arcane_amm_v3_0.aleo {
         // overflow is acceptable, protocol has to withdraw before it hits type(uint128).max fees
         if (zeroForOne) {
             pool_state_feeGrowthGlobal0X128 = state_feeGrowthGlobalX128;
-            if (state_protocolFee > 0u8) {
+            if (state_protocolFee > 0u64) {
                  pool_state_t1_protocol_fees = pool_state_t1_protocol_fees + state_protocolFee;
             }
         } else {
             pool_state_feeGrowthGlobal1X128 = state_feeGrowthGlobalX128;
-            if (state_protocolFee > 0u8) {
+            if (state_protocolFee > 0u64) {
                 pool_state_t2_protocol_fees = pool_state_t2_protocol_fees + state_protocolFee;
             }
         }
 
-        let pool_key: field = get_pool_key(pool_meta.token1_id, pool_meta.token2_id);
         let updated_pool_state: PoolState = PoolState {
                     tick: pool_state_tick,
                     sqrt_price_x24: pool_state_sqrt_price_x24,
@@ -682,13 +681,13 @@ program arcane_amm_v3_0.aleo {
                     t1_protocol_fees: pool_state_t1_protocol_fees,
                     t2_protocol_fees: pool_state_t2_protocol_fees,
                     feeGrowthGlobal0X32: pool_state_feeGrowthGlobal0X128,
-                    feeGrowthGlobal1X32: pool_state_feeGrowthGlobal1X128
+                    feeGrowthGlobal1X32: pool_state_feeGrowthGlobal1X128,
+                    swap_fee: pool_state.swap_fee
                 };
         Mapping::set(map_pool_state, pool_key, updated_pool_state);
 
-
-        let amount1: i64 = (zeroForOne == exactInput) ? (amountSpecified - state_amountSpecifiedRemaining) : state_amountCalculated;
-        let amount2: i64 = (zeroForOne == exactInput) ? state_amountCalculated : (amountSpecified - state_amountSpecifiedRemaining);
+        let amount1: i64 = (zeroForOne == exact_input) ? ((amountSpecified as i64) - state_amountSpecifiedRemaining) : state_amountCalculated;
+        let amount2: i64 = (zeroForOne == exact_input) ? state_amountCalculated : ((amountSpecified as i64) - state_amountSpecifiedRemaining);
 
         if (zeroForOne) {
             // amount1 is amount_in
