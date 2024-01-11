@@ -705,7 +705,7 @@ program arcane_amm_v3_0.aleo {
                 };
                 Mapping::set(map_extra_voucher, extra_change_voucher_out, extra_amount_out);
             }
-            let amount1_abs: u64 = amount_in.abs() as u64;
+            let amount1_abs: u64 = amount1.abs() as u64;
             assert(amount1_abs <= amount_in);
             // Return token out change
             let extra_change_in: u64 = amount_in - amount1_abs;
@@ -974,12 +974,13 @@ program arcane_amm_v3_0.aleo {
 
     inline lm_add_delta(x: u64, y: i64) -> u64 {
         let z: u64 = 0u64;
-        let y_abs: i64 = y.abs();
 
         if (y < 0i64) {
+            let y_abs: i64 = -y;
             z = x - (y_abs as u64);
             assert(z < x);
         } else {
+            let y_abs: i64 = y;
             z = x + (y_abs as u64);
             assert(z >= x);
         }
