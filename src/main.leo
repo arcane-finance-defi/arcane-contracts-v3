@@ -914,9 +914,9 @@ program arcane_amm_v3_0.aleo {
     const U64_MAX: u64 = 18446744073709551615u64;
     const U40_MAX: u64 = 1099511627775u64;
 
-    transition main(a: u64, b: u64) -> u64 {
+    transition main(dummy: field) -> u64 {
         let c: u64 = lm_add_delta(1u64, 1i64);
-        return mul_mod(a, b + c, 123u64);
+        return mul_mod(1u64, 2u64, 123u64);
     }
 
     inline gt_u64(x: u64, y: u64) -> u64 {
@@ -974,11 +974,13 @@ program arcane_amm_v3_0.aleo {
 
     inline lm_add_delta(x: u64, y: i64) -> u64 {
         let z: u64 = 0u64;
-        if y < 0i64 {
-            z = x - (y.abs() as u64);
+        let y_abs: i64 = y.abs();
+
+        if (y < 0i64) {
+            z = x - (y_abs as u64);
             assert(z < x);
         } else {
-            z = x + (y.abs() as u64);
+            z = x + (y_abs as u64);
             assert(z >= x);
         }
         return z;
