@@ -532,7 +532,10 @@ program arcane_amm_v3_0.aleo {
         let state_protocolFee: u128 = 0u128;
         let state_liquidity: u128 = liquidityStart;
 
-        for i: u32 in 0u32..13u32 { // NOTE ticks fragmentation + https://github.com/AleoHQ/snarkVM/issues/2248 (max 16 writes per finalize)
+        // NOTE ticks fragmentation:
+        // max 16 writes per finalize (https://github.com/AleoHQ/snarkVM/issues/2248) = update pool_state + voucher t1 + voucher t2 + ticks info updates
+        // assume that one swap will not shift price more than 3 ticks left or right
+        for i: u32 in 0u32..3u32 {
             // continue swapping as long as we haven't used the entire input/output and haven't reached the sqrt_price_x64 limit
             let finished: bool = (state_amountSpecifiedRemaining == 0i64 || state_price == price_limit || state_tick > MAX_TICK || state_tick < MIN_TICK);
             if (!finished) {
