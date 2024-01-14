@@ -5,7 +5,8 @@ program arcane_amm_v3_0.aleo {
 
     const SELF_ADDRESS: address = aleo1hy8w46tflux7zwpeaw8ny7tq6wkzqux40z75a9ah3q9tqa4t758qltkqu7;
 
-    const MIN_TICK: u32 = 0u32;
+    // NOTE ticks fragmentation
+    const MIN_TICK: u32 = 1u32;
     const MAX_TICK: u32 = 24u32;
 
     /// ██████████████████████████████████████████████████████████████████████
@@ -14,13 +15,13 @@ program arcane_amm_v3_0.aleo {
 
     ///  Pools
     struct PoolKey {
-        token1: u128,
-        token2: u128,
+        token1: u64,
+        token2: u64,
     }
 
     struct PoolTickKey {
-        token1: u128,
-        token2: u128,
+        token1: u64,
+        token2: u64,
         tick: u32
     }
 
@@ -32,12 +33,13 @@ program arcane_amm_v3_0.aleo {
     // immutable pool data
     struct PoolMeta {
         id: field, // hash(token1.id, token2.id)
-        token1_id: u128,
-        token2_id: u128,
+        token1_id: u64,
+        token2_id: u64,
         swap_fee: u128, // 10000 based, 1 = 0.01% = 0.0001
         protocol_fee: u128, // 0,4,5,6,7,8,9,10 => 0, 1/4, 1/5, 1/6, 1/7, 1/8, 1/9, or 1/10
         tick_prices: [u128; 24], // sqrt_price_x64 for tick i = tick_prices[i]
-        tick_price_ranges: [u128; 25] // lower sqrt_price_x64 = tick_price_ranges[i], upper sqrt_price_x64 = tick_price_ranges[i + 1]
+        tick_price_ranges: [u128; 25], // lower sqrt_price_x64 = tick_price_ranges[i], upper sqrt_price_x64 = tick_price_ranges[i + 1]
+        max_liq_per_tick: u128 // sqrt(amount_x * amount_y)
     }
 
     // mutable pool data
@@ -59,20 +61,20 @@ program arcane_amm_v3_0.aleo {
 
     record PositionReceipt {
         owner: address,
-        token1_id: u128,
-        token2_id: u128,
+        token1_id: u64,
+        token2_id: u64,
         position_id: field
     }
 
     ///  Extra amount
     struct ExtraAmount {
-        token_id: u128,
+        token_id: u64,
         token_amount: u128,
     }
 
     record ExtraAmountVoucher {
              owner: address,
-             token_id: u128,
+             token_id: u64,
              voucher: field,
     }
 
@@ -85,24 +87,25 @@ program arcane_amm_v3_0.aleo {
 
     mapping map_extra_voucher: field => ExtraAmount; // extra amount by voucher_id
 
-    inline get_pool_key(token1: u128, token2: u128) -> field {
-        let actual_token1: u128 = token1 > token2 ? token2 : token1;
-        let actual_token2: u128 = token1 <= token2 ? token2 : token1;
+    inline get_pool_key(token1: u64, token2: u64) -> field {
+        let actual_token1: u64 = token1 > token2 ? token2 : token1;
+        let actual_token2: u64 = token1 <= token2 ? token2 : token1;
         return BHP256::hash_to_field(PoolKey {token1: actual_token1, token2: actual_token2});
     }
 
-    inline get_pool_tick_key(token1: u128, token2: u128, tick: u32) -> field {
-        let actual_token1: u128 = token1 > token2 ? token2 : token1;
-        let actual_token2: u128 = token1 <= token2 ? token2 : token1;
+    inline get_pool_tick_key(token1: u64, token2: u64, tick: u32) -> field {
+        let actual_token1: u64 = token1 > token2 ? token2 : token1;
+        let actual_token2: u64 = token1 <= token2 ? token2 : token1;
         return BHP256::hash_to_field(PoolTickKey {token1: actual_token1, token2: actual_token2, tick: tick});
     }
 
     transition create_pool(
         owner: address,
-        token1_id: u128,
-        token2_id: u128,
+        token1_id: u64,
+        token2_id: u64,
         tick_prices: [u128; 24], // sqrt_price_x64 for tick i = tick_prices[i]
         tick_price_ranges: [u128; 25], // lower sqrt_price_x64 = tick_price_ranges[i], upper sqrt_price_x64 = tick_price_ranges[i + 1]
+        max_liq_per_tick: u128,
         tick: u32,
         swap_fee: u128, // 10000 based, 1 = 0.01% = 0.0001,
         protocol_fee: u128, // 0,4,5,6,7,8,9,10 => 0, 1/4, 1/5, 1/6, 1/7, 1/8, 1/9, or 1/10
@@ -119,15 +122,16 @@ program arcane_amm_v3_0.aleo {
             pool_key: pool_key
         };
 
-        return (pool_admin) then finalize(pool_key, token1_id, token2_id, tick_prices, tick_price_ranges, tick, swap_fee, protocol_fee);
+        return (pool_admin) then finalize(pool_key, token1_id, token2_id, tick_prices, tick_price_ranges, max_liq_per_tick, tick, swap_fee, protocol_fee);
     }
 
     finalize create_pool(
             pool_key: field,
-            token1_id: u128,
-            token2_id: u128,
+            token1_id: u64,
+            token2_id: u64,
             tick_prices: [u128; 24],
             tick_price_ranges: [u128; 25],
+            max_liq_per_tick: u128,
             tick: u32,
             swap_fee: u128,
             protocol_fee: u128) {
@@ -138,11 +142,14 @@ program arcane_amm_v3_0.aleo {
             id: pool_key, // hash(token1.id, token2.id)
             token1_id: token1_id,
             token2_id: token2_id,
-            tick_price: tick_price,
-            tick_price_ranges: price_ranges,
+            tick_prices: tick_prices,
+            tick_price_ranges: tick_price_ranges,
             swap_fee: swap_fee,
-            protocol_fee: protocol_fee
+            protocol_fee: protocol_fee,
+            max_liq_per_tick: max_liq_per_tick
         };
+
+        let sqrt_price_x64: u128 = get_price_by_tick(tick, tick_prices);
 
         let pool_state: PoolState = PoolState {
             tick: tick,
@@ -209,9 +216,9 @@ program arcane_amm_v3_0.aleo {
         position_id: field,
         tick_lower: u32,
         tick_upper: u32,
-        token1_id: u128,
+        token1_id: u64,
         token1_amount: u128,
-        token2_id: u128,
+        token2_id: u64,
         token2_amount: u128,
         extra_amount_voucher_1: field,
         extra_amount_voucher_2: field) {
@@ -358,9 +365,9 @@ program arcane_amm_v3_0.aleo {
         position_id: field,
         tick_lower: u32,
         tick_upper: u32,
-        token1_id: u128,
+        token1_id: u64,
         token1_amount: u128,
-        token2_id: u128,
+        token2_id: u64,
         token2_amount: u128,
         extra_amount_voucher_1: field,
         extra_amount_voucher_2: field) {
@@ -475,7 +482,7 @@ program arcane_amm_v3_0.aleo {
     }
 
 
-    transition swap(exact_input: bool, receiver: address, token_in: arcanetoken.leo/ArcaneToken, amount_in: u128, token_out_id: u128, amount_out: u128, price_limit: u128, extra_voucher_in: field, extra_voucher_out: field) -> (arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken, ExtraAmountVoucher, ExtraAmountVoucher) {
+    transition swap(exact_input: bool, receiver: address, token_in: arcanetoken.leo/ArcaneToken, amount_in: u128, token_out_id: u64, amount_out: u128, price_limit: u128, extra_voucher_in: field, extra_voucher_out: field) -> (arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken, ExtraAmountVoucher, ExtraAmountVoucher) {
         assert(amount_out > 0u128);
 
         let change: ArcaneToken = arcanetoken.leo/transfer_private_to_public_arc(token_in, SELF_ADDRESS, amount_in as u128);
@@ -498,7 +505,7 @@ program arcane_amm_v3_0.aleo {
         return (change, token_out, extra_amount_voucher_in, extra_amount_voucher_out) then finalize(exact_input, token_in.token_id, amount_in, token_out_id, amount_out, price_limit, extra_voucher_in, extra_voucher_out);
     }
 
-    finalize swap(exact_input: bool, token_in_id: u128, amount_in: u128, token_out_id: u128, amount_out: u128, price_limit: u128, extra_change_voucher_in: field, extra_change_voucher_out: field) {
+    finalize swap(exact_input: bool, token_in_id: u64, amount_in: u128, token_out_id: u64, amount_out: u128, price_limit: u128, extra_change_voucher_in: field, extra_change_voucher_out: field) {
         let pool_key: field = get_pool_key(token_in_id, token_out_id);
         let pool_meta: PoolMeta = Mapping::get(map_pool_meta, pool_key);
         let pool_state: PoolState = Mapping::get(map_pool_state, pool_key);
@@ -515,6 +522,7 @@ program arcane_amm_v3_0.aleo {
         // liquidity at the beginning of the swap
         let liquidityStart: u128 = pool_state.liquidity;
         let swap_fee: u128 = pool_meta.swap_fee;
+        let protocol_fee: u128 = pool_meta.protocol_fee;
 
         let state_amountSpecifiedRemaining: i64 = amountSpecified as i64;
         let state_amountCalculated: i64 = 0i64;
@@ -524,9 +532,9 @@ program arcane_amm_v3_0.aleo {
         let state_protocolFee: u128 = 0u128;
         let state_liquidity: u128 = liquidityStart;
 
-        for i: u32 in 0u32..10u32 {
+        for i: u32 in 0u32..13u32 { // NOTE ticks fragmentation + https://github.com/AleoHQ/snarkVM/issues/2248 (max 16 writes per finalize)
             // continue swapping as long as we haven't used the entire input/output and haven't reached the sqrt_price_x64 limit
-            let finished: bool = (state_amountSpecifiedRemaining == 0i64 || state_price == price_limit);
+            let finished: bool = (state_amountSpecifiedRemaining == 0i64 || state_price == price_limit || state_tick > MAX_TICK || state_tick < MIN_TICK);
             if (!finished) {
                  let step_price_start: u128 = state_price;
                  let step_tickNext: u32 = 0u32;
@@ -538,17 +546,15 @@ program arcane_amm_v3_0.aleo {
 
                  let tick_to_check: u32 = state_tick;
                  let found_initialized_tick: bool = false;
-                 for j: u32 in 0u32..256u32 {
-                     if (!found_initialized_tick) {
-                         tick_to_check = zeroForOne ? tick_to_check - (pool_meta.tick_spacing as u32) : tick_to_check + (pool_meta.tick_spacing as u32);
-                         let pool_tick_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, tick_to_check);
-                         let tick_initialized: bool = Mapping::get(map_tick_initialized, pool_tick_key);
-                         if (tick_initialized && !found_initialized_tick) {
-                             found_initialized_tick = true;
-                             step_tickNext = tick_to_check;
-                             step_initialized = true;
-                         }
-                     }
+
+                 tick_to_check = zeroForOne ? tick_to_check - 1u32 : tick_to_check + 1u32;
+
+                 let pool_tick_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, tick_to_check);
+                 let tick_initialized: bool = Mapping::get(map_tick_initialized, pool_tick_key);
+                 if (tick_initialized && !found_initialized_tick) {
+                     found_initialized_tick = true;
+                     step_tickNext = tick_to_check;
+                     step_initialized = true;
                  }
                  if (!found_initialized_tick) {
                      step_tickNext = tick_to_check;
@@ -563,7 +569,7 @@ program arcane_amm_v3_0.aleo {
                  }
 
                  // get the sqrt_price_x64 for the next tick
-                 step_price_next = get_price_by_tick(step_tickNext, pool_meta.tick_price);
+                 step_price_next = get_price_by_tick(step_tickNext, pool_meta.tick_prices);
 
                  // compute values to swap to the target tick, sqrt_price_x64 limit, or point where input/output amount is exhausted
 
@@ -607,8 +613,8 @@ program arcane_amm_v3_0.aleo {
                      if (step_initialized) {
                          // check for the placeholder value, which we replace with the actual value the first time the swap
                          // crosses an initialized tick
-                         let pool_tick_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, step_tickNext);
-                         let next_tick_info: TickInfo = Mapping::get(map_tick_info, pool_tick_key);
+                         let pool_tick_next_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, step_tickNext);
+                         let next_tick_info: TickInfo = Mapping::get(map_tick_info, pool_tick_next_key);
 
                          let updated_next_tick_info: TickInfo = cross(
                                  next_tick_info,
@@ -616,7 +622,7 @@ program arcane_amm_v3_0.aleo {
                                  (zeroForOne ? pool_state.fee_growth_global_2 : state_fee_growth_global)
                              );
                          let liquidityNet: i64 = updated_next_tick_info.liquidityNet;
-                         Mapping::set(map_tick_info, pool_tick_key, updated_next_tick_info);
+                         Mapping::set(map_tick_info, pool_tick_next_key, updated_next_tick_info);
 
                          // if we're moving leftward, we interpret liquidityNet as the opposite sign
                          // safe because liquidityNet cannot be type(int128).min
@@ -676,69 +682,58 @@ program arcane_amm_v3_0.aleo {
                     t1_protocol_fees: pool_state_t1_protocol_fees,
                     t2_protocol_fees: pool_state_t2_protocol_fees,
                     fee_growth_global_1: pool_state_fee_growth_global_1,
-                    fee_growth_global_2: pool_state_fee_growth_global_2,
-                    swap_fee: pool_meta.swap_fee
+                    fee_growth_global_2: pool_state_fee_growth_global_2
                 };
         Mapping::set(map_pool_state, pool_key, updated_pool_state);
 
         let amount1: i64 = (zeroForOne == exact_input) ? ((amountSpecified as i64) - state_amountSpecifiedRemaining) : state_amountCalculated;
         let amount2: i64 = (zeroForOne == exact_input) ? state_amountCalculated : ((amountSpecified as i64) - state_amountSpecifiedRemaining);
 
+        let extra_change_out: u128 = 0u128;
+        let extra_change_in: u128 = 0u128;
         if (zeroForOne) {
             // amount1 is amount_in
             // amount2 amount_out
             if (amount2 < 0i64) {
                 let amount2_abs: u128 = amount2.abs() as u128;
                 assert(amount_out <= amount2_abs);
-                // Return token out change
-                let extra_change_out: u128 = amount2_abs - amount_out;
-                let extra_amount_out: ExtraAmount = ExtraAmount {
-                    token_id: token_out_id,
-                    token_amount: extra_change_out,
-                };
-                Mapping::set(map_extra_voucher, extra_change_voucher_out, extra_amount_out);
+                extra_change_out = amount2_abs - amount_out;
             }
             let amount1_abs: u128 = amount1.abs() as u128;
             assert(amount1_abs <= amount_in);
-            // Return token out change
-            let extra_change_in: u128 = amount_in - amount1_abs;
-            let extra_amount_in: ExtraAmount = ExtraAmount {
-                token_id: token_in_id,
-                token_amount: extra_change_in,
-            };
-            Mapping::set(map_extra_voucher, extra_change_voucher_in, extra_amount_in);
+            extra_change_in = amount_in - amount1_abs;
         } else {
             // amount1 is amount_out
             // amount2 is amount_in
             if (amount1 < 0i64) {
                 let amount1_abs: u128 = amount1.abs() as u128;
                 assert(amount_out <= amount1_abs);
-                // Return token out change
-                let extra_change_out: u128 = amount1_abs - amount_out;
-                let extra_amount_out: ExtraAmount = ExtraAmount {
-                    token_id: token_out_id,
-                    token_amount: extra_change_out,
-                };
-                Mapping::set(map_extra_voucher, extra_change_voucher_out, extra_amount_out);
+                extra_change_out = amount1_abs - amount_out;
             }
             let amount2_abs: u128 = amount2.abs() as u128;
             assert(amount2_abs <= amount_in);
-            // Return token out change
-            let extra_change_in: u128 = amount_in - amount2_abs;
-            let extra_amount_in: ExtraAmount = ExtraAmount {
-                token_id: token_in_id,
-                token_amount: extra_change_in,
-            };
-            Mapping::set(map_extra_voucher, extra_change_voucher_in, extra_amount_in);
+            extra_change_in = amount_in - amount2_abs;
         }
+
+        let extra_amount_out: ExtraAmount = ExtraAmount {
+                            token_id: token_out_id,
+                            token_amount: extra_change_out
+                            };
+        Mapping::set(map_extra_voucher, extra_change_voucher_out, extra_amount_out);
+
+        let extra_amount_in: ExtraAmount = ExtraAmount {
+            token_id: token_in_id,
+            token_amount: extra_change_in
+        };
+        Mapping::set(map_extra_voucher, extra_change_voucher_in, extra_amount_in);
     }
 
     transition redeem_voucher(voucher: ExtraAmountVoucher, amount: u128) -> (arcanetoken.leo/ArcaneToken) {
-        let token: ArcaneToken = arcanetoken.leo/transfer_public_to_private_arc(voucher.token_id, voucher.owner, amount as u128);
+        let token: ArcaneToken = arcanetoken.leo/transfer_public_to_private_arc(voucher.token_id, voucher.owner, amount);
         return token then finalize(voucher.token_id, voucher.voucher, amount);
     }
 
-    finalize redeem_voucher(token_id: u128, voucher_code: field, amount: u128) {
+    finalize redeem_voucher(token_id: u64, voucher_code: field, amount: u128) {
         let extra: ExtraAmount = Mapping::get(map_extra_voucher, voucher_code);
         assert (extra.token_id == token_id && extra.token_amount == amount);
         Mapping::remove(map_extra_voucher, voucher_code);
@@ -806,7 +801,7 @@ program arcane_amm_v3_0.aleo {
         }
 
     inline lm_add_delta(x: u128, y: i64) -> u128 {
-        return ((x as i128) + y) as u128;
+        return ((x as i128) + y as i128) as u128;
 //      let z: u128 = 0u128; todo assertion 'left right failed: Constant constraint failed: (0 * 1) =?= 1
 //
 //      if (y < 0i64) {
@@ -982,8 +977,8 @@ program arcane_amm_v3_0.aleo {
                 // current tick is below the passed range; liquidity can only become in range by crossing from left to
                 // right, when we'll need _more_ token0 (it's becoming more valuable) so user must provide it
                 token1_amount = getAmount0Delta(
-                    get_price_by_tick(params.tick_lower, pool_meta.tick_price),
-                    get_price_by_tick(params.tick_upper, pool_meta.tick_price),
+                    get_price_by_tick(params.tick_lower, params.pool_meta.tick_prices),
+                    get_price_by_tick(params.tick_upper, params.pool_meta.tick_prices),
                     params.liquidity_delta
                 );
             } else if (params.pool_state.tick < params.tick_upper) {
@@ -992,11 +987,11 @@ program arcane_amm_v3_0.aleo {
 
                 token1_amount = getAmount0Delta(
                     params.pool_state.sqrt_price_x64,
-                    get_price_by_tick(params.tick_upper, pool_meta.tick_price),
+                    get_price_by_tick(params.tick_upper, params.pool_meta.tick_prices),
                     params.liquidity_delta
                 );
                 token2_amount = getAmount1Delta(
-                    get_price_by_tick(params.tick_lower, pool_meta.tick_price),
+                    get_price_by_tick(params.tick_lower, params.pool_meta.tick_prices),
                     params.pool_state.sqrt_price_x64,
                     params.liquidity_delta
                 );
@@ -1006,8 +1001,8 @@ program arcane_amm_v3_0.aleo {
                 // current tick is above the passed range; liquidity can only become in range by crossing from right to
                 // left, when we'll need _more_ token1 (it's becoming more valuable) so user must provide it
                 token2_amount = getAmount1Delta(
-                    get_price_by_tick(params.tick_lower, pool_meta.tick_price),
-                    get_price_by_tick(params.tick_upper, pool_meta.tick_price),
+                    get_price_by_tick(params.tick_lower, params.pool_meta.tick_prices),
+                    get_price_by_tick(params.tick_upper, params.pool_meta.tick_prices),
                     params.liquidity_delta
                 );
             }
@@ -1072,7 +1067,7 @@ program arcane_amm_v3_0.aleo {
                 fee_growth_global_1,
                 fee_growth_global_2,
                 false, // is upper
-                pool_meta.max_liq_per_tick // max_liquidity
+                pool_meta.max_liq_per_tick
             );
             new_lower_tick_info = lower_res.0;
             flipped_lower = lower_res.1;
@@ -1087,7 +1082,7 @@ program arcane_amm_v3_0.aleo {
                 fee_growth_global_1,
                 fee_growth_global_2,
                 true, // is upper
-                pool_meta.max_liq_per_tick // max_liquidity
+                pool_meta.max_liq_per_tick
             );
             new_upper_tick_info = upper_res.0;
             flipped_upper = upper_res.1;
@@ -1193,7 +1188,7 @@ program arcane_amm_v3_0.aleo {
         if (amount == 0u128) {
             return sqrt_price_x64;
         }
-        let numerator1: u64 = liquidity.shl(Q24_RESOLUTION);
+        let numerator1: u128 = liquidity.shl(Q64_RESOLUTION);
 
         if (add) {
             let product: u128 = (amount * sqrt_price_x64) / amount;
@@ -1478,56 +1473,55 @@ program arcane_amm_v3_0.aleo {
        //                                 Tick Math
        // ██████████████████████████████████████████████████████████████████████
 
+    // NOTE ticks fragmentation
     inline get_tick_by_price(sqrt_price_x64: u128, tick_price_ranges: [u128; 25]) -> u32 {
-        if (sqrt_price_x64 >= tick_price_ranges[0] && sqrt_price_x64 <= tick_price_ranges[1]) {
-            return 0u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[1] && sqrt_price_x64 <= tick_price_ranges[2]) {
+        if (sqrt_price_x64 >= tick_price_ranges[0u8] && sqrt_price_x64 <= tick_price_ranges[1u8]) {
             return 1u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[2] && sqrt_price_x64 <= tick_price_ranges[3]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[1u8] && sqrt_price_x64 <= tick_price_ranges[2u8]) {
             return 2u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[3] && sqrt_price_x64 <= tick_price_ranges[4]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[2u8] && sqrt_price_x64 <= tick_price_ranges[3u8]) {
             return 3u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[4] && sqrt_price_x64 <= tick_price_ranges[5]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[3u8] && sqrt_price_x64 <= tick_price_ranges[4u8]) {
             return 4u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[5] && sqrt_price_x64 <= tick_price_ranges[6]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[4u8] && sqrt_price_x64 <= tick_price_ranges[5u8]) {
             return 5u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[6] && sqrt_price_x64 <= tick_price_ranges[7]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[5u8] && sqrt_price_x64 <= tick_price_ranges[6u8]) {
             return 6u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[7] && sqrt_price_x64 <= tick_price_ranges[8]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[6u8] && sqrt_price_x64 <= tick_price_ranges[7u8]) {
             return 7u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[8] && sqrt_price_x64 <= tick_price_ranges[9]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[7u8] && sqrt_price_x64 <= tick_price_ranges[8u8]) {
             return 8u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[9] && sqrt_price_x64 <= tick_price_ranges[10]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[8u8] && sqrt_price_x64 <= tick_price_ranges[9u8]) {
             return 9u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[10] && sqrt_price_x64 <= tick_price_ranges[11]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[9u8] && sqrt_price_x64 <= tick_price_ranges[10u8]) {
             return 10u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[11] && sqrt_price_x64 <= tick_price_ranges[12]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[10u8] && sqrt_price_x64 <= tick_price_ranges[11u8]) {
             return 11u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[12] && sqrt_price_x64 <= tick_price_ranges[13]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[11u8] && sqrt_price_x64 <= tick_price_ranges[12u8]) {
             return 12u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[13] && sqrt_price_x64 <= tick_price_ranges[14]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[12u8] && sqrt_price_x64 <= tick_price_ranges[13u8]) {
             return 13u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[14] && sqrt_price_x64 <= tick_price_ranges[15]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[13u8] && sqrt_price_x64 <= tick_price_ranges[14u8]) {
             return 14u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[15] && sqrt_price_x64 <= tick_price_ranges[16]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[14u8] && sqrt_price_x64 <= tick_price_ranges[15u8]) {
             return 15u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[16] && sqrt_price_x64 <= tick_price_ranges[17]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[15u8] && sqrt_price_x64 <= tick_price_ranges[16u8]) {
             return 16u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[17] && sqrt_price_x64 <= tick_price_ranges[18]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[16u8] && sqrt_price_x64 <= tick_price_ranges[17u8]) {
             return 17u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[18] && sqrt_price_x64 <= tick_price_ranges[19]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[17u8] && sqrt_price_x64 <= tick_price_ranges[18u8]) {
             return 18u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[19] && sqrt_price_x64 <= tick_price_ranges[20]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[18u8] && sqrt_price_x64 <= tick_price_ranges[19u8]) {
             return 19u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[20] && sqrt_price_x64 <= tick_price_ranges[21]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[19u8] && sqrt_price_x64 <= tick_price_ranges[20u8]) {
             return 20u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[21] && sqrt_price_x64 <= tick_price_ranges[22]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[20u8] && sqrt_price_x64 <= tick_price_ranges[21u8]) {
             return 21u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[22] && sqrt_price_x64 <= tick_price_ranges[23]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[21u8] && sqrt_price_x64 <= tick_price_ranges[22u8]) {
             return 22u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[23] && sqrt_price_x64 <= tick_price_ranges[24]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[22u8] && sqrt_price_x64 <= tick_price_ranges[23u8]) {
             return 23u32;
-        } else if (sqrt_price_x64 >= tick_price_ranges[24] && sqrt_price_x64 <= tick_price_ranges[25]) {
+        } else if (sqrt_price_x64 >= tick_price_ranges[23u8] && sqrt_price_x64 <= tick_price_ranges[24u8]) {
             return 24u32;
         } else {
             assert(false);
@@ -1535,55 +1529,57 @@ program arcane_amm_v3_0.aleo {
         }
     }
 
-    inline get_price_by_tick(tick: u32, tick_price: [u128; 24]) -> u128 {
-        if (tick == 0u32) {
-            return tick_price[0u8];
-        } else if (tick == 1u32) {
-            return tick_price[1u8];
-        } else if (tick == 2u32) {
-            return tick_price[2u8];
-        } else if (tick == 3u32) {
-            return tick_price[3u8];
-        } else if (tick == 4u32) {
-            return tick_price[4u8];
-        } else if (tick == 5u32) {
-            return tick_price[5u8];
-        } else if (tick == 6u32) {
-            return tick_price[6u8];
-        } else if (tick == 7u32) {
-            return tick_price[7u8];
-        } else if (tick == 8u32) {
-            return tick_price[8u8];
-        } else if (tick == 9u32) {
-            return tick_price[9u8];
-        } else if (tick == 10u32) {
-            return tick_price[10u8];
-        } else if (tick == 11u32) {
-            return tick_price[11u8];
-        } else if (tick == 12u32) {
-            return tick_price[12u8];
-        } else if (tick == 13u32) {
-            return tick_price[13u8];
-        } else if (tick == 14u32) {
-            return tick_price[14u8];
-        } else if (tick == 15u32) {
-            return tick_price[15u8];
-        } else if (tick == 16u32) {
-            return tick_price[16u8];
-        } else if (tick == 17u32) {
-            return tick_price[17u8];
-        } else if (tick == 18u32) {
-            return tick_price[18u8];
-        } else if (tick == 19u32) {
-            return tick_price[19u8];
-        } else if (tick == 20u32) {
-            return tick_price[20u8];
-        } else if (tick == 21u32) {
-            return tick_price[21u8];
-        } else if (tick == 22u32) {
-            return tick_price[22u8];
-        } else if (tick == 23u32) {
-            return tick_price[23u8];
+    // NOTE ticks fragmentation
+    inline get_price_by_tick(tick: u32, tick_prices: [u128; 24]) -> u128 {
+        let tick_index: u32 = tick - 1u32;
+        if (tick_index == 0u32) {
+            return tick_prices[0u8];
+        } else if (tick_index == 1u32) {
+            return tick_prices[1u8];
+        } else if (tick_index == 2u32) {
+            return tick_prices[2u8];
+        } else if (tick_index == 3u32) {
+            return tick_prices[3u8];
+        } else if (tick_index == 4u32) {
+            return tick_prices[4u8];
+        } else if (tick_index == 5u32) {
+            return tick_prices[5u8];
+        } else if (tick_index == 6u32) {
+            return tick_prices[6u8];
+        } else if (tick_index == 7u32) {
+            return tick_prices[7u8];
+        } else if (tick_index == 8u32) {
+            return tick_prices[8u8];
+        } else if (tick_index == 9u32) {
+            return tick_prices[9u8];
+        } else if (tick_index == 10u32) {
+            return tick_prices[10u8];
+        } else if (tick_index == 11u32) {
+            return tick_prices[11u8];
+        } else if (tick_index == 12u32) {
+            return tick_prices[12u8];
+        } else if (tick_index == 13u32) {
+            return tick_prices[13u8];
+        } else if (tick_index == 14u32) {
+            return tick_prices[14u8];
+        } else if (tick_index == 15u32) {
+            return tick_prices[15u8];
+        } else if (tick_index == 16u32) {
+            return tick_prices[16u8];
+        } else if (tick_index == 17u32) {
+            return tick_prices[17u8];
+        } else if (tick_index == 18u32) {
+            return tick_prices[18u8];
+        } else if (tick_index == 19u32) {
+            return tick_prices[19u8];
+        } else if (tick_index == 20u32) {
+            return tick_prices[20u8];
+        } else if (tick_index == 21u32) {
+            return tick_prices[21u8];
+        } else if (tick_index == 22u32) {
+            return tick_prices[22u8];
+        } else if (tick_index == 23u32) {
+            return tick_prices[23u8];
         } else {
             assert(false);
             return 0u128;
@@ -1624,7 +1620,7 @@ program arcane_amm_v3_0.aleo {
         let exactIn: bool = amountRemaining >= 0i64;
 
         if (exactIn) {
-            let amountRemainingLessFee: u128 = mul_div(amountRemaining, 10000u128 - feePips, 10000u128);
+            let amountRemainingLessFee: u128 = mul_div(amountRemaining as u128, 10000u128 - feePips, 10000u128);
             amountIn = zeroForOne
                 ? getAmount0Delta_roundUp(price_target, price_current, liquidity, true)
                 : getAmount1Delta_roundUp(price_current, price_target, liquidity, true);
