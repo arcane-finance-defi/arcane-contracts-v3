@@ -1,13 +1,25 @@
-import credits.leo;
 import arcanetoken.leo;
+import arcaneutil.leo;
 
-program arcane_amm_v3_0.aleo {
+program arcane_amm_v3_1.aleo {
 
-    const SELF_ADDRESS: address = aleo1hy8w46tflux7zwpeaw8ny7tq6wkzqux40z75a9ah3q9tqa4t758qltkqu7;
+    const SELF_ADDRESS: address = aleo1w376z2qqq2e6nd86yusklup68mygqpfpf5qdnnvruyydfe4hpuxs3mzr4g;
 
     // NOTE ticks fragmentation
     const MIN_TICK: u32 = 1u32;
     const MAX_TICK: u32 = 24u32;
+
+    transition get_program_address() -> address {
+        return arcaneutil.leo/get_caller_address();
+    }
+
+    transition get_pool_key_transition(id1: u64, id2: u64) -> field {
+        return get_pool_key(id1, id2);
+    }
+
+    transition get_position_key(owner: address, tick_lower: u32, tick_upper: u32) -> field {
+        return get_position_info_key(owner, tick_lower, tick_upper);
+    }
 
     /// ██████████████████████████████████████████████████████████████████████
     ///                             Private AMM Swaps
@@ -175,6 +187,7 @@ program arcane_amm_v3_0.aleo {
     transition create_position(owner: address,
                                tick_lower: u32,
                                tick_upper: u32,
+                               liquidity: u64, // sqrt (amount1 * amount2)
                                token1: arcanetoken.leo/ArcaneToken,
                                token1_amount: u128,
                                extra_voucher_1: field,
@@ -209,13 +222,14 @@ program arcane_amm_v3_0.aleo {
             voucher: extra_voucher_2
         };
 
-        return (token1_change_record, token2_change_record, position_receipt, extra_amount_voucher_1, extra_amount_voucher_2) then finalize(position_id, tick_lower, tick_upper, token1.token_id, token1_amount, token2.token_id, token2_amount, extra_voucher_1, extra_voucher_2);
+        return (token1_change_record, token2_change_record, position_receipt, extra_amount_voucher_1, extra_amount_voucher_2) then finalize(position_id, tick_lower, tick_upper, liquidity, token1.token_id, token1_amount, token2.token_id, token2_amount, extra_voucher_1, extra_voucher_2);
     }
 
     finalize create_position(
         position_id: field,
         tick_lower: u32,
         tick_upper: u32,
+        liquidity: u64,
         token1_id: u64,
         token1_amount: u128,
         token2_id: u64,
@@ -231,26 +245,15 @@ program arcane_amm_v3_0.aleo {
         assert(pool_meta.token1_id == token1_id);
         assert(pool_meta.token2_id == token2_id);
 
-        let lower_tick_info: TickInfo = empty_tick_info();
+        let empty_tick_lower_info: TickInfo = empty_tick_info();
         let lower_tick_key: field = get_pool_tick_key(token1_id, token2_id, tick_lower);
-        if (Mapping::contains(map_tick_info, lower_tick_key)) {
-            lower_tick_info = Mapping::get(map_tick_info, lower_tick_key);
-        }
+        let lower_tick_info: TickInfo = Mapping::get_or_use(map_tick_info, lower_tick_key, empty_tick_lower_info);
 
-        let upper_tick_info: TickInfo = empty_tick_info();
+        let empty_tick_upper_info: TickInfo = empty_tick_info();
         let upper_tick_key: field = get_pool_tick_key(token1_id, token2_id, tick_upper);
-        if (Mapping::contains(map_tick_info, upper_tick_key)) {
-            upper_tick_info = Mapping::get(map_tick_info, upper_tick_key);
-        }
+        let upper_tick_info: TickInfo = Mapping::get_or_use(map_tick_info, upper_tick_key, empty_tick_upper_info);
 
-        let liquidity_delta: i64 = 0i64;
-        if (token1_amount != 0u128 && token2_amount != 0u128) {
-            liquidity_delta = (token1_amount * token2_amount) as i64;
-        } else if (token1_amount == 0u128) {
-            liquidity_delta = token2_amount as i64;
-        } else {
-            liquidity_delta = token1_amount as i64;
-        }
+        let liquidity_delta: i64 = liquidity as i64;
 
         let params: ModifyPositionParams = ModifyPositionParams {
                 orig_position: empty_position_info(),
@@ -276,58 +279,48 @@ program arcane_amm_v3_0.aleo {
         assert(token2_amount_actual <= token2_amount);
 
         let extra_change_1: u128 = token1_amount - token1_amount_actual;
-        if (extra_change_1 > 0u128) {
-            let extra_amount_1: ExtraAmount = ExtraAmount {
-                token_id: token1_id,
-                token_amount: extra_change_1,
-            };
-            Mapping::set(map_extra_voucher, extra_amount_voucher_1, extra_amount_1);
-        }
+        let extra_amount_1: ExtraAmount = ExtraAmount {
+            token_id: token1_id,
+            token_amount: extra_change_1,
+        };
+        Mapping::set(map_extra_voucher, extra_amount_voucher_1, extra_amount_1);
 
         let extra_change_2: u128 = token2_amount - token2_amount_actual;
-        if (extra_change_2 > 0u128) {
-            let extra_amount_2: ExtraAmount = ExtraAmount {
-                token_id: token2_id,
-                token_amount: extra_change_2,
-            };
-            Mapping::set(map_extra_voucher, extra_amount_voucher_2, extra_amount_2);
-        }
+        let extra_amount_2: ExtraAmount = ExtraAmount {
+            token_id: token2_id,
+            token_amount: extra_change_2,
+        };
+        Mapping::set(map_extra_voucher, extra_amount_voucher_2, extra_amount_2);
 
         let effects: UpdatePositionResult = result.update_position_result;
         Mapping::set(map_position, position_id, effects.modified_position);
-        if (!effects.effect_update_lower_tick.is_empty) {
-            Mapping::set(map_tick_info, effects.effect_update_lower_tick.tick_key, effects.effect_update_lower_tick.tick_info);
-        }
-        if (!effects.effect_update_upper_tick.is_empty) {
-            Mapping::set(map_tick_info, effects.effect_update_upper_tick.tick_key, effects.effect_update_upper_tick.tick_info);
-        }
-        if (!effects.effect_flip_lower_tick.is_empty) {
-            let lower_inited: bool = Mapping::get_or_use(map_tick_initialized, lower_tick_key, false);
-            Mapping::set(map_tick_initialized, lower_tick_key, !lower_inited);
-        }
-        if (!effects.effect_flip_upper_tick.is_empty) {
-            let upper_inited: bool = Mapping::get_or_use(map_tick_initialized, upper_tick_key, false);
-            Mapping::set(map_tick_initialized, upper_tick_key, !upper_inited);
-        }
-        if (!effects.effect_clear_lower_tick.is_empty) {
-            Mapping::remove(map_tick_info, lower_tick_key);
-        }
-        if (!effects.effect_clear_upper_tick.is_empty) {
-            Mapping::remove(map_tick_info, upper_tick_key);
-        }
+
+        let lower_tick_info_modified: TickInfo = effects.effect_update_lower_tick.is_empty ? lower_tick_info : effects.effect_update_lower_tick.tick_info;
+        Mapping::set(map_tick_info, effects.effect_update_lower_tick.tick_key, lower_tick_info_modified);
+
+        let upper_tick_info_modified: TickInfo = effects.effect_update_upper_tick.is_empty ? upper_tick_info : effects.effect_update_upper_tick.tick_info;
+        Mapping::set(map_tick_info, effects.effect_update_upper_tick.tick_key, upper_tick_info_modified);
+
+        let lower_inited: bool = Mapping::get_or_use(map_tick_initialized, lower_tick_key, false);
+        let lower_flipped: bool = !effects.effect_flip_lower_tick.is_empty;
+        let lower_modified: bool = lower_flipped ? !lower_inited : lower_inited;
+        Mapping::set(map_tick_initialized, lower_tick_key, lower_modified);
+
+        let upper_inited: bool = Mapping::get_or_use(map_tick_initialized, upper_tick_key, false);
+        let upper_flipped: bool = !effects.effect_flip_upper_tick.is_empty;
+        let upper_modified: bool = upper_flipped ? !upper_inited : upper_inited;
+        Mapping::set(map_tick_initialized, upper_tick_key, upper_modified);
 
         let liquidity_after: u128 = result.liquidity_after;
-        if (liquidity_after != pool_state.liquidity) {
-            Mapping::set(map_pool_state, pool_key, PoolState {
-                 tick: pool_state.tick,
-                 sqrt_price_x64: pool_state.sqrt_price_x64,
-                 liquidity: liquidity_after,
-                 t1_protocol_fees: pool_state.t1_protocol_fees,
-                 t2_protocol_fees: pool_state.t2_protocol_fees,
-                 fee_growth_global_1: pool_state.fee_growth_global_1,
-                 fee_growth_global_2: pool_state.fee_growth_global_2
-            });
-        }
+        Mapping::set(map_pool_state, pool_key, PoolState {
+             tick: pool_state.tick,
+             sqrt_price_x64: pool_state.sqrt_price_x64,
+             liquidity: liquidity_after,
+             t1_protocol_fees: pool_state.t1_protocol_fees,
+             t2_protocol_fees: pool_state.t2_protocol_fees,
+             fee_growth_global_1: pool_state.fee_growth_global_1,
+             fee_growth_global_2: pool_state.fee_growth_global_2
+        });
     }
 
     transition close_position(receiver: address,
@@ -382,17 +375,13 @@ program arcane_amm_v3_0.aleo {
         assert(pool_meta.token1_id == token1_id);
         assert(pool_meta.token2_id == token2_id);
 
-        let lower_tick_info: TickInfo = empty_tick_info();
+        let empty_lower_tick_info: TickInfo = empty_tick_info();
         let lower_tick_key: field = get_pool_tick_key(token1_id, token2_id, tick_lower);
-        if (Mapping::contains(map_tick_info, lower_tick_key)) {
-            lower_tick_info = Mapping::get(map_tick_info, lower_tick_key);
-        }
+        let lower_tick_info: TickInfo = Mapping::get_or_use(map_tick_info, lower_tick_key, empty_lower_tick_info);
 
-        let upper_tick_info: TickInfo = empty_tick_info();
+        let empty_upper_tick_info: TickInfo = empty_tick_info();
         let upper_tick_key: field = get_pool_tick_key(token1_id, token2_id, tick_upper);
-        if (Mapping::contains(map_tick_info, upper_tick_key)) {
-            upper_tick_info = Mapping::get(map_tick_info, upper_tick_key);
-        }
+        let upper_tick_info: TickInfo = Mapping::get_or_use(map_tick_info, upper_tick_key, empty_upper_tick_info);
 
         let liquidity_delta: i64 = 0i64;
         if (token1_amount != 0u128 && token2_amount != 0u128) {
@@ -427,58 +416,48 @@ program arcane_amm_v3_0.aleo {
         assert(token2_amount_actual >= token2_amount);
 
         let extra_change_1: u128 = token1_amount_actual - token1_amount;
-        if (extra_change_1 > 0u128) {
-            let extra_amount_1: ExtraAmount = ExtraAmount {
-                token_id: token1_id,
-                token_amount: extra_change_1
-            };
-            Mapping::set(map_extra_voucher, extra_amount_voucher_1, extra_amount_1);
-        }
+        let extra_amount_1: ExtraAmount = ExtraAmount {
+            token_id: token1_id,
+            token_amount: extra_change_1
+        };
+        Mapping::set(map_extra_voucher, extra_amount_voucher_1, extra_amount_1);
 
         let extra_change_2: u128 = token2_amount_actual - token2_amount;
-        if (extra_change_2 > 0u128) {
-            let extra_amount_2: ExtraAmount = ExtraAmount {
-                token_id: token2_id,
-                token_amount: extra_change_2
-            };
-            Mapping::set(map_extra_voucher, extra_amount_voucher_2, extra_amount_2);
-        }
+        let extra_amount_2: ExtraAmount = ExtraAmount {
+            token_id: token2_id,
+            token_amount: extra_change_2
+        };
+        Mapping::set(map_extra_voucher, extra_amount_voucher_2, extra_amount_2);
 
         let effects: UpdatePositionResult = result.update_position_result;
         Mapping::set(map_position, position_id, effects.modified_position);
-        if (!effects.effect_update_lower_tick.is_empty) {
-            Mapping::set(map_tick_info, effects.effect_update_lower_tick.tick_key, effects.effect_update_lower_tick.tick_info);
-        }
-        if (!effects.effect_update_upper_tick.is_empty) {
-            Mapping::set(map_tick_info, effects.effect_update_upper_tick.tick_key, effects.effect_update_upper_tick.tick_info);
-        }
-        if (!effects.effect_flip_lower_tick.is_empty) {
-            let lower_inited: bool = Mapping::get_or_use(map_tick_initialized, lower_tick_key, false);
-            Mapping::set(map_tick_initialized, lower_tick_key, !lower_inited);
-        }
-        if (!effects.effect_flip_upper_tick.is_empty) {
-            let upper_inited: bool = Mapping::get_or_use(map_tick_initialized, upper_tick_key, false);
-            Mapping::set(map_tick_initialized, upper_tick_key, !upper_inited);
-        }
-        if (!effects.effect_clear_lower_tick.is_empty) {
-            Mapping::remove(map_tick_info, lower_tick_key);
-        }
-        if (!effects.effect_clear_upper_tick.is_empty) {
-            Mapping::remove(map_tick_info, upper_tick_key);
-        }
+
+        let lower_tick_info_modified: TickInfo = effects.effect_update_lower_tick.is_empty ? lower_tick_info : effects.effect_update_lower_tick.tick_info;
+        Mapping::set(map_tick_info, effects.effect_update_lower_tick.tick_key, lower_tick_info_modified);
+
+        let upper_tick_info_modified: TickInfo = effects.effect_update_upper_tick.is_empty ? upper_tick_info : effects.effect_update_upper_tick.tick_info;
+        Mapping::set(map_tick_info, effects.effect_update_upper_tick.tick_key, upper_tick_info_modified);
+
+        let lower_inited: bool = Mapping::get_or_use(map_tick_initialized, lower_tick_key, false);
+        let lower_flipped: bool = !effects.effect_flip_lower_tick.is_empty;
+        let lower_modified: bool = lower_flipped ? !lower_inited : lower_inited;
+        Mapping::set(map_tick_initialized, lower_tick_key, lower_modified);
+
+        let upper_inited: bool = Mapping::get_or_use(map_tick_initialized, upper_tick_key, false);
+        let upper_flipped: bool = !effects.effect_flip_upper_tick.is_empty;
+        let upper_modified: bool = upper_flipped ? !upper_inited : upper_inited;
+        Mapping::set(map_tick_initialized, upper_tick_key, upper_modified);
 
         let liquidity_after: u128 = result.liquidity_after;
-        if (liquidity_after != pool_state.liquidity) {
-            Mapping::set(map_pool_state, pool_key, PoolState {
-                 tick: pool_state.tick,
-                 sqrt_price_x64: pool_state.sqrt_price_x64,
-                 liquidity: liquidity_after,
-                 t1_protocol_fees: pool_state.t1_protocol_fees,
-                 t2_protocol_fees: pool_state.t2_protocol_fees,
-                 fee_growth_global_1: pool_state.fee_growth_global_1,
-                 fee_growth_global_2: pool_state.fee_growth_global_2
-            });
-        }
+        Mapping::set(map_pool_state, pool_key, PoolState {
+             tick: pool_state.tick,
+             sqrt_price_x64: pool_state.sqrt_price_x64,
+             liquidity: liquidity_after,
+             t1_protocol_fees: pool_state.t1_protocol_fees,
+             t2_protocol_fees: pool_state.t2_protocol_fees,
+             fee_growth_global_1: pool_state.fee_growth_global_1,
+             fee_growth_global_2: pool_state.fee_growth_global_2
+        });
     }
 
 
@@ -538,108 +517,114 @@ program arcane_amm_v3_0.aleo {
         for i: u32 in 0u32..3u32 {
             // continue swapping as long as we haven't used the entire input/output and haven't reached the sqrt_price_x64 limit
             let finished: bool = (state_amountSpecifiedRemaining == 0i64 || state_price == price_limit || state_tick > MAX_TICK || state_tick < MIN_TICK);
-            if (!finished) {
-                 let step_price_start: u128 = state_price;
-                 let step_tickNext: u32 = 0u32;
-                 let step_initialized: bool = false;
-                 let step_price_next: u128 = 0u128;
-                 let step_amountIn: u128 = 0u128;
-                 let step_amountOut: u128 = 0u128;
-                 let step_feeAmount: u128 = 0u128;
+            let step_price_start: u128 = state_price;
+            let step_tickNext: u32 = 0u32;
+            let step_initialized: bool = false;
+            let step_price_next: u128 = 0u128;
+            let step_amountIn: u128 = 0u128;
+            let step_amountOut: u128 = 0u128;
+            let step_feeAmount: u128 = 0u128;
 
-                 let tick_to_check: u32 = state_tick;
-                 let found_initialized_tick: bool = false;
+            let tick_to_check: u32 = state_tick;
+            let found_initialized_tick: bool = false;
 
-                 tick_to_check = zeroForOne ? tick_to_check - 1u32 : tick_to_check + 1u32;
+            tick_to_check = zeroForOne ? tick_to_check - 1u32 : tick_to_check + 1u32;
 
-                 let pool_tick_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, tick_to_check);
-                 let tick_initialized: bool = Mapping::get(map_tick_initialized, pool_tick_key);
-                 if (tick_initialized && !found_initialized_tick) {
-                     found_initialized_tick = true;
-                     step_tickNext = tick_to_check;
-                     step_initialized = true;
-                 }
-                 if (!found_initialized_tick) {
-                     step_tickNext = tick_to_check;
-                     step_initialized = false;
-                 }
-
-                 // ensure that we do not overshoot the min/max tick, as the tick bitmap is not aware of these bounds
-                 if (step_tickNext < MIN_TICK) {
-                     step_tickNext = MIN_TICK;
-                 } else if (step_tickNext > MAX_TICK) {
-                     step_tickNext = MAX_TICK;
-                 }
-
-                 // get the sqrt_price_x64 for the next tick
-                 step_price_next = get_price_by_tick(step_tickNext, pool_meta.tick_prices);
-
-                 // compute values to swap to the target tick, sqrt_price_x64 limit, or point where input/output amount is exhausted
-
-                 let swap_step_result: ComputeSwapStepResult = computeSwapStep(
-                     state_price,
-                     (zeroForOne ? step_price_next < price_limit : step_price_next > price_limit)
-                         ? price_limit
-                         : step_price_next,
-                     state_liquidity,
-                     state_amountSpecifiedRemaining,
-                     pool_meta.swap_fee
-                 );
-                 state_price = swap_step_result.price_next;
-                 step_amountIn = swap_step_result.amountIn;
-                 step_amountOut = swap_step_result.amountOut;
-                 step_feeAmount = swap_step_result.feeAmount;
-
-                if (exact_input) {
-                    state_amountSpecifiedRemaining = state_amountSpecifiedRemaining - ((step_amountIn + step_feeAmount) as i64);
-                    state_amountCalculated = state_amountCalculated.sub(step_amountOut as i64);
-                } else {
-                    state_amountSpecifiedRemaining = state_amountSpecifiedRemaining + step_amountOut as i64;
-                    state_amountCalculated = state_amountCalculated.add((step_amountIn + step_feeAmount) as i64);
-                }
-
-                 // if the protocol fee is on, calculate how much is owed, decrement feeAmount, and increment protocolFee
-                 if (protocol_fee > 0u128) {
-                     let delta: u128 = step_feeAmount / protocol_fee; // delta goes to protocol
-                     step_feeAmount = step_feeAmount - delta;
-                     state_protocolFee = state_protocolFee + delta;
-                 }
-
-                 // update global fee tracker
-                 if (state_liquidity > 0u128) {
-                    state_fee_growth_global = state_fee_growth_global + mul_div(step_feeAmount, FP_Q64, state_liquidity);
-                 }
-
-                 // shift tick if we reached the next sqrt_price_x64
-                 if (state_price == step_price_next) {
-                     // if the tick is initialized, run the tick transition
-                     if (step_initialized) {
-                         // check for the placeholder value, which we replace with the actual value the first time the swap
-                         // crosses an initialized tick
-                         let pool_tick_next_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, step_tickNext);
-                         let next_tick_info: TickInfo = Mapping::get(map_tick_info, pool_tick_next_key);
-
-                         let updated_next_tick_info: TickInfo = cross(
-                                 next_tick_info,
-                                 (zeroForOne ? state_fee_growth_global : pool_state.fee_growth_global_1),
-                                 (zeroForOne ? pool_state.fee_growth_global_2 : state_fee_growth_global)
-                             );
-                         let liquidityNet: i64 = updated_next_tick_info.liquidityNet;
-                         Mapping::set(map_tick_info, pool_tick_next_key, updated_next_tick_info);
-
-                         // if we're moving leftward, we interpret liquidityNet as the opposite sign
-                         // safe because liquidityNet cannot be type(int128).min
-                         if (zeroForOne) {
-                            liquidityNet = -liquidityNet;
-                         }
-                         state_liquidity = lm_add_delta(state_liquidity, liquidityNet);
-                     }
-                     state_tick = zeroForOne ? step_tickNext - 1u32 : step_tickNext;
-                 } else if (state_price != step_price_start) {
-                     // recompute unless we're on a lower tick boundary (i.e. already transitioned ticks), and haven't moved
-                     state_tick = get_tick_by_price(state_price, pool_meta.tick_price_ranges);
-                 }
+            let pool_tick_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, tick_to_check);
+            let tick_initialized: bool = Mapping::get_or_use(map_tick_initialized, pool_tick_key, false);
+            if (tick_initialized && !found_initialized_tick) {
+                found_initialized_tick = true;
+                step_tickNext = tick_to_check;
+                step_initialized = true;
             }
+            if (!found_initialized_tick) {
+                step_tickNext = tick_to_check;
+                step_initialized = false;
+            }
+
+            // ensure that we do not overshoot the min/max tick, as the tick bitmap is not aware of these bounds
+            if (step_tickNext < MIN_TICK) {
+                step_tickNext = MIN_TICK;
+            } else if (step_tickNext > MAX_TICK) {
+                step_tickNext = MAX_TICK;
+            }
+
+            // get the sqrt_price_x64 for the next tick
+            step_price_next = get_price_by_tick(step_tickNext, pool_meta.tick_prices);
+
+            // compute values to swap to the target tick, sqrt_price_x64 limit, or point where input/output amount is exhausted
+
+            let empty_swap_step: ComputeSwapStepResult = ComputeSwapStepResult {
+                price_next: state_price,
+                amountIn: 0u128,
+                amountOut: 0u128,
+                feeAmount: 0u128
+            };
+            let swap_step_result: ComputeSwapStepResult = finished ? empty_swap_step : computeSwapStep(
+                state_price,
+                (zeroForOne ? step_price_next < price_limit : step_price_next > price_limit)
+                    ? price_limit
+                    : step_price_next,
+                state_liquidity,
+                state_amountSpecifiedRemaining,
+                pool_meta.swap_fee
+            );
+            state_price = swap_step_result.price_next;
+            step_amountIn = swap_step_result.amountIn;
+            step_amountOut = swap_step_result.amountOut;
+            step_feeAmount = swap_step_result.feeAmount;
+
+            if (exact_input) {
+               state_amountSpecifiedRemaining = state_amountSpecifiedRemaining - ((step_amountIn + step_feeAmount) as i64);
+               state_amountCalculated = state_amountCalculated.sub(step_amountOut as i64);
+            } else {
+               state_amountSpecifiedRemaining = state_amountSpecifiedRemaining + step_amountOut as i64;
+               state_amountCalculated = state_amountCalculated.add((step_amountIn + step_feeAmount) as i64);
+            }
+
+            // if the protocol fee is on, calculate how much is owed, decrement feeAmount, and increment protocolFee
+            if (protocol_fee > 0u128) {
+                let delta: u128 = step_feeAmount / protocol_fee; // delta goes to protocol
+                step_feeAmount = step_feeAmount - delta;
+                state_protocolFee = state_protocolFee + delta;
+            }
+
+            // update global fee tracker
+            if (state_liquidity > 0u128) {
+               state_fee_growth_global = state_fee_growth_global + mul_div(step_feeAmount, FP_Q64, state_liquidity);
+            }
+
+            let pool_tick_next_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, step_tickNext);
+            let next_tick_info_prev: TickInfo = Mapping::get(map_tick_info, pool_tick_next_key);
+            let updated_next_tick_info: TickInfo = next_tick_info_prev;
+
+            // shift tick if we reached the next sqrt_price_x64
+            if (state_price == step_price_next) {
+                // if the tick is initialized, run the tick transition
+                if (step_initialized) {
+                    // check for the placeholder value, which we replace with the actual value the first time the swap
+                    // crosses an initialized tick
+
+                    updated_next_tick_info = cross(
+                            next_tick_info_prev,
+                            (zeroForOne ? state_fee_growth_global : pool_state.fee_growth_global_1),
+                            (zeroForOne ? pool_state.fee_growth_global_2 : state_fee_growth_global)
+                        );
+                    let liquidityNet: i64 = updated_next_tick_info.liquidityNet;
+
+                    // if we're moving leftward, we interpret liquidityNet as the opposite sign
+                    // safe because liquidityNet cannot be type(int128).min
+                    if (zeroForOne) {
+                       liquidityNet = -liquidityNet;
+                    }
+                    state_liquidity = lm_add_delta(state_liquidity, liquidityNet);
+                }
+                state_tick = zeroForOne ? step_tickNext - 1u32 : step_tickNext;
+            } else if (state_price != step_price_start) {
+                // recompute unless we're on a lower tick boundary (i.e. already transitioned ticks), and haven't moved
+                state_tick = get_tick_by_price(state_price, pool_meta.tick_price_ranges);
+            }
+            Mapping::set(map_tick_info, pool_tick_next_key, updated_next_tick_info);
         }
 
         let pool_state_price: u128 = pool_state.sqrt_price_x64;
