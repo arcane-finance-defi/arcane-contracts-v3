@@ -1,7 +1,7 @@
 import arcanetoken.leo;
 import arcaneutil.leo;
 
-program arcane_amm_v3_2.aleo {
+program arcane_amm_v3_3.aleo {
 
     const SELF_ADDRESS: address = aleo1pvndtzpeujjk6387wpxw4z4fz5qeq866rhcecz9hqnf0dmsrt5gqgsl0a4;
 
@@ -426,11 +426,11 @@ program arcane_amm_v3_2.aleo {
 
         let liquidity_delta: i64 = 0i64;
         if (token1_amount != 0u128 && token2_amount != 0u128) {
-            liquidity_delta = -1i64 * (token1_amount * token2_amount) as i64;
+            liquidity_delta = ((token1_amount * token2_amount) as i64).neg();
         } else if (token1_amount == 0u128) {
-            liquidity_delta = -1i64 * (token2_amount as i64);
+            liquidity_delta = (token2_amount as i64).neg();
         } else {
-            liquidity_delta = -1i64 * (token1_amount as i64);
+            liquidity_delta = (token1_amount as i64).neg();
         }
 
         let params: ModifyPositionParams = ModifyPositionParams {
@@ -656,7 +656,7 @@ program arcane_amm_v3_2.aleo {
                     // if we're moving leftward, we interpret liquidityNet as the opposite sign
                     // safe because liquidityNet cannot be type(int128).min
                     if (zeroForOne) {
-                       liquidityNet = -liquidityNet;
+                       liquidityNet = liquidityNet.neg();
                     }
                     state_liquidity = lm_add_delta(state_liquidity, liquidityNet);
                 }
@@ -970,8 +970,6 @@ program arcane_amm_v3_2.aleo {
     inline modify_position(params: ModifyPositionParams) -> ModifyPositionResult {
         check_ticks(params.tick_lower, params.tick_upper);
 
-        let token1_amount: i64 = 0i64;
-        let token2_amount: i64 = 0i64;
         let liquidity_after: u128 = params.pool_state.liquidity;
 
         let update_position_result: UpdatePositionResult = update_position(
@@ -991,7 +989,7 @@ program arcane_amm_v3_2.aleo {
         let current_above: bool = params.pool_state.tick > params.tick_upper;
         let current_inside: bool = !current_below && !current_above;
 
-        token1_amount = current_above ? 0i64 : ( current_below ? getAmount0Delta(
+        let token1_amount: i64 = current_above ? 0i64 : ( current_below ? getAmount0Delta(
             get_price_by_tick(params.tick_lower, params.pool_meta.tick_prices),
             get_price_by_tick(params.tick_upper, params.pool_meta.tick_prices),
             params.liquidity_delta
@@ -1001,7 +999,7 @@ program arcane_amm_v3_2.aleo {
                params.liquidity_delta
         ));
 
-        token2_amount = current_below ? 0i64 : (current_above ? getAmount1Delta(
+        let token2_amount: i64 = current_below ? 0i64 : (current_above ? getAmount1Delta(
            get_price_by_tick(params.tick_lower, params.pool_meta.tick_prices),
            get_price_by_tick(params.tick_upper, params.pool_meta.tick_prices),
            params.liquidity_delta) :
@@ -1329,14 +1327,17 @@ program arcane_amm_v3_2.aleo {
                         );
        }
 
+       transition test_get_amount_0_delta() -> i64 {
+            return getAmount0Delta(4219135934u128, 4284216422u128, 10000000000i64);
+       }
+
        inline getAmount0Delta(
               price_a: u128,
               price_b: u128,
               liquidity: i64
           ) -> i64 {
-              return liquidity < 0i64
-                      ? -1i64 * (getAmount0Delta_roundUp(price_a, price_b, -liquidity as u128, false) as i64)
-                      : getAmount0Delta_roundUp(price_a, price_b, liquidity as u128, true) as i64;
+              return liquidity < 0i64 ? (getAmount0Delta_roundUp(price_a, price_b, liquidity.abs() as u128, false) as i64).neg()
+                : getAmount0Delta_roundUp(price_a, price_b, liquidity.abs() as u128, true) as i64;
           }
 
        inline getAmount1Delta(
@@ -1346,8 +1347,8 @@ program arcane_amm_v3_2.aleo {
            ) -> i64 {
                return
                    liquidity < 0i64
-                       ? -1i64 * getAmount1Delta_roundUp(price_a, price_b, -liquidity as u128, false) as i64
-                       : getAmount1Delta_roundUp(price_a, price_b, liquidity as u128, true) as i64;
+                       ? (getAmount1Delta_roundUp(price_a, price_b, liquidity.abs() as u128, false) as i64).neg()
+                       : getAmount1Delta_roundUp(price_a, price_b, liquidity.abs() as u128, true) as i64;
            }
 
 
@@ -1599,6 +1600,13 @@ program arcane_amm_v3_2.aleo {
         }
     }
 
+    transition test_get_price_by_tick() -> u128 {
+        let tick: u32 = 14u32;
+        let tick_prices: [u128; 24] = [3593427452u128,4085866296u128,4108378126u128,4130767274u128,4153035722u128,4175185403u128,4197218197u128,4219135934u128,4240940399u128,4262633331u128,4284216422u128,4305691326u128,4327059652u128,4348322973u128,4369482820u128,4390540691u128,4411498045u128,4432356308u128,4453116872u128,4473781099u128,4494350316u128,4514825822u128,4535208886u128,4915814758u128];
+
+        return get_price_by_tick(tick, tick_prices);
+    }
+
     // NOTE ticks fragmentation
     inline get_price_by_tick(tick: u32, tick_prices: [u128; 24]) -> u128 {
         let tick_index: u32 = tick - 1u32;
@@ -1663,6 +1671,14 @@ program arcane_amm_v3_2.aleo {
         feeAmount: u128
     }
 
+    transition test_compute_swap_step() -> ComputeSwapStepResult {
+        return computeSwapStep(4294967296u128, 4401031842u128, 1000000u128, 10000i64, 10u128);
+    }
+
+    transition test_compute_swap_step_neg() -> ComputeSwapStepResult {
+        return computeSwapStep(4294967296u128, 4401031842u128, 1000000u128, -10000i64, 10u128);
+    }
+
 /// @notice Computes the result of swapping some amount in, or amount out, given the parameters of the swap
     /// @dev The fee, plus the amount in, will never exceed the amount remaining if the swap's `amountSpecified` is positive
     /// @param price_current The current sqrt sqrt_price_x32 of the pool
@@ -1690,7 +1706,7 @@ program arcane_amm_v3_2.aleo {
         let exactIn: bool = amountRemaining >= 0i64;
 
         if (exactIn) {
-            let amountRemainingLessFee: u128 = mul_div(amountRemaining as u128, 10000u128 - feePips, 10000u128);
+            let amountRemainingLessFee: u128 = mul_div(amountRemaining.abs() as u128, 10000u128 - feePips, 10000u128);
             amountIn = zeroForOne
                 ? getAmount0Delta_roundUp(price_target, price_current, liquidity, true)
                 : getAmount1Delta_roundUp(price_current, price_target, liquidity, true);
@@ -1708,13 +1724,13 @@ program arcane_amm_v3_2.aleo {
             amountOut = zeroForOne
                 ? getAmount1Delta_roundUp(price_target, price_current, liquidity, false)
                 : getAmount0Delta_roundUp(price_current, price_target, liquidity, false);
-            if (((-amountRemaining) as u128) >= amountOut) {
+            if (((amountRemaining.abs()) as u128) >= amountOut) {
                 price_next = price_target;
             } else {
                 price_next = getNextSqrtPriceFromOutput(
                     price_current,
                     liquidity,
-                    ((-amountRemaining) as u128),
+                    ((amountRemaining.abs()) as u128),
                     zeroForOne
                 );
             }
@@ -1740,13 +1756,14 @@ program arcane_amm_v3_2.aleo {
         }
 
         // cap the output amount to not exceed the remaining output amount
-        if (!exactIn && amountOut > ((-amountRemaining) as u128)) {
-            amountOut = ((-amountRemaining) as u128);
+        if (!exactIn && amountOut > ((amountRemaining.abs()) as u128)) {
+            amountOut = ((amountRemaining.abs()) as u128);
         }
 
         if (exactIn && price_next != price_target) {
             // we didn't reach the target, so take the remainder of the maximum input as fee
-            feeAmount = (amountRemaining as u128) - amountIn;
+            let fee_amount_tmp: i64 = (amountRemaining.abs()) - amountIn as i64;
+            feeAmount = fee_amount_tmp < 0i64 ? 0u128 :fee_amount_tmp.abs() as u128;
         } else {
             feeAmount = mul_div_rounding_up(amountIn, feePips, 10000u128 - feePips);
         }
