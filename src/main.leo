@@ -3,7 +3,7 @@ import arcaneutil.leo;
 
 program arcane_amm_v3_3.aleo {
 
-    const SELF_ADDRESS: address = aleo1pvndtzpeujjk6387wpxw4z4fz5qeq866rhcecz9hqnf0dmsrt5gqgsl0a4;
+    const SELF_ADDRESS: address = aleo1dae33cvcr9qq85c3k5hfalcz2qew6q7360dtqx2xlrhw2uavzcpsqe7cqw;
 
     // NOTE ticks fragmentation
     const MIN_TICK: u32 = 1u32;
