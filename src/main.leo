@@ -1,9 +1,9 @@
 import arcanetoken.aleo;
 import arcaneutil.aleo;
 
-program arcane_amm_v3_6.aleo {
+program arcane_amm_v3_8.aleo {
 
-    const SELF_ADDRESS: address = aleo1m5g8kvu40q6tvg8jqd3v7pmrqag0l87tvw7y79g0sme4r7xskq8sstna2y;
+    const SELF_ADDRESS: address = aleo1ge2rm5gttgd7cqhjf35hdq0fftgwrne5jv0gtq43vmxstdq0rgyqrunmyf;
 
     // NOTE ticks fragmentation
     const MIN_TICK: u32 = 1u32;
@@ -566,8 +566,6 @@ program arcane_amm_v3_6.aleo {
             let step_feeAmount: u128 = 0u128;
 
             let tick_to_check: u32 = state_tick;
-            let found_initialized_tick: bool = false;
-
             tick_to_check = token1ForToken2 ? tick_to_check - 1u32 : tick_to_check + 1u32;
 
             let pool_tick_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, tick_to_check);
@@ -628,7 +626,7 @@ program arcane_amm_v3_6.aleo {
             }
 
             let pool_tick_next_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, step_tickNext);
-            let next_tick_info_prev: TickInfo = Mapping::get(map_tick_info, pool_tick_next_key);
+            let next_tick_info_prev: TickInfo = Mapping::get_or_use(map_tick_info, pool_tick_next_key, empty_tick_info());
             let updated_next_tick_info: TickInfo = next_tick_info_prev;
 
             // shift tick if we reached the next sqrt_price_x32
@@ -949,9 +947,9 @@ program arcane_amm_v3_6.aleo {
     }
 
     inline check_ticks(lower: u32, upper: u32) {
-//         assert(lower < upper);
-//         assert(lower >= MIN_TICK);
-//         assert(upper <= MAX_TICK);
+        assert(lower < upper);
+        assert(lower >= MIN_TICK);
+        assert(upper <= MAX_TICK);
     }
 
     /// @dev Effect some changes to a position
@@ -1170,13 +1168,6 @@ program arcane_amm_v3_6.aleo {
             let numerator1: u128 = liquidity.shl(Q32_RESOLUTION);
 
             if (add) {
-//                 let product: u128 = (amount.mul(sqrt_price_x32)).div(amount);
-//                 if (product == sqrt_price_x32) {
-//                     let denominator: u128 = numerator1 + product;
-//                     if (denominator >= numerator1) {
-//                         return mul_div_rounding_up(numerator1, sqrt_price_x32, denominator);
-//                     }
-//                 } leads to div by zero
                 return div_rounding_up(numerator1, (numerator1.div(sqrt_price_x32)).add(amount));
             } else {
                 let product: u128 = amount * sqrt_price_x32;
