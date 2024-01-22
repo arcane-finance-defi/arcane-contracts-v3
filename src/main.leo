@@ -1,9 +1,9 @@
 import arcanetoken.leo;
 import arcaneutil.leo;
 
-program arcane_amm_v3_3.aleo {
+program arcane_amm_v3_6.aleo {
 
-    const SELF_ADDRESS: address = aleo1dae33cvcr9qq85c3k5hfalcz2qew6q7360dtqx2xlrhw2uavzcpsqe7cqw;
+    const SELF_ADDRESS: address = aleo1m5g8kvu40q6tvg8jqd3v7pmrqag0l87tvw7y79g0sme4r7xskq8sstna2y;
 
     // NOTE ticks fragmentation
     const MIN_TICK: u32 = 1u32;
@@ -530,13 +530,13 @@ program arcane_amm_v3_3.aleo {
         let pool_meta: PoolMeta = Mapping::get(map_pool_meta, pool_key);
         let pool_state: PoolState = Mapping::get(map_pool_state, pool_key);
 
-        let zeroForOne: bool = token_in_id > token_out_id;
+        let token1ForToken2: bool = token_in_id < token_out_id; 
         let amountSpecified: u128 = amount_in;
 
         assert(
-            zeroForOne
-                ? price_limit < pool_state.sqrt_price_x32 // && price_limit > TickMath.MIN_SQRT_RATIO todo MIN/MAX sqrt ratio
-                : price_limit > pool_state.sqrt_price_x32 // && price_limit < TickMath.MAX_SQRT_RATIO
+            token1ForToken2
+                ? price_limit < pool_state.sqrt_price_x32 
+                : price_limit > pool_state.sqrt_price_x32
         );
 
         // liquidity at the beginning of the swap
@@ -548,7 +548,7 @@ program arcane_amm_v3_3.aleo {
         let state_amountCalculated: i64 = 0i64;
         let state_price: u128 = pool_state.sqrt_price_x32;
         let state_tick: u32 = pool_state.tick;
-        let state_fee_growth_global: u128 = zeroForOne ? pool_state.fee_growth_global_1 : pool_state.fee_growth_global_2;
+        let state_fee_growth_global: u128 = token1ForToken2 ? pool_state.fee_growth_global_1 : pool_state.fee_growth_global_2;
         let state_protocolFee: u128 = 0u128;
         let state_liquidity: u128 = liquidityStart;
 
@@ -569,7 +569,7 @@ program arcane_amm_v3_3.aleo {
             let tick_to_check: u32 = state_tick;
             let found_initialized_tick: bool = false;
 
-            tick_to_check = zeroForOne ? tick_to_check - 1u32 : tick_to_check + 1u32;
+            tick_to_check = token1ForToken2 ? tick_to_check - 1u32 : tick_to_check + 1u32;
 
             let pool_tick_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, tick_to_check);
             let tick_initialized: bool = Mapping::get_or_use(map_tick_initialized, pool_tick_key, false);
@@ -603,7 +603,7 @@ program arcane_amm_v3_3.aleo {
             };
             let swap_step_result: ComputeSwapStepResult = finished ? empty_swap_step : computeSwapStep(
                 state_price,
-                (zeroForOne ? step_price_next < price_limit : step_price_next > price_limit)
+                (token1ForToken2 ? step_price_next < price_limit : step_price_next > price_limit)
                     ? price_limit
                     : step_price_next,
                 state_liquidity,
@@ -648,19 +648,19 @@ program arcane_amm_v3_3.aleo {
 
                     updated_next_tick_info = cross(
                             next_tick_info_prev,
-                            (zeroForOne ? state_fee_growth_global : pool_state.fee_growth_global_1),
-                            (zeroForOne ? pool_state.fee_growth_global_2 : state_fee_growth_global)
+                            (token1ForToken2 ? state_fee_growth_global : pool_state.fee_growth_global_1),
+                            (token1ForToken2 ? pool_state.fee_growth_global_2 : state_fee_growth_global)
                         );
                     let liquidityNet: i64 = updated_next_tick_info.liquidityNet;
 
                     // if we're moving leftward, we interpret liquidityNet as the opposite sign
                     // safe because liquidityNet cannot be type(int128).min
-                    if (zeroForOne) {
+                    if (token1ForToken2) {
                        liquidityNet = liquidityNet.neg();
                     }
                     state_liquidity = lm_add_delta(state_liquidity, liquidityNet);
                 }
-                state_tick = zeroForOne ? step_tickNext - 1u32 : step_tickNext;
+                state_tick = token1ForToken2 ? step_tickNext - 1u32 : step_tickNext;
             } else if (state_price != step_price_start) {
                 // recompute unless we're on a lower tick boundary (i.e. already transitioned ticks), and haven't moved
                 state_tick = get_tick_by_price(state_price, pool_meta.tick_price_ranges);
@@ -692,7 +692,7 @@ program arcane_amm_v3_3.aleo {
 
         // update fee growth global and, if necessary, protocol fees
         // overflow is acceptable, protocol has to withdraw before it hits type(uint128).max fees
-        if (zeroForOne) {
+        if (token1ForToken2) {
             pool_state_fee_growth_global_1 = state_fee_growth_global;
             if (state_protocolFee > 0u128) {
                  pool_state_t1_protocol_fees = pool_state_t1_protocol_fees + state_protocolFee;
@@ -715,12 +715,12 @@ program arcane_amm_v3_3.aleo {
                 };
         Mapping::set(map_pool_state, pool_key, updated_pool_state);
 
-        let amount1: i64 = (zeroForOne == exact_input) ? ((amountSpecified as i64) - state_amountSpecifiedRemaining) : state_amountCalculated;
-        let amount2: i64 = (zeroForOne == exact_input) ? state_amountCalculated : ((amountSpecified as i64) - state_amountSpecifiedRemaining);
+        let amount1: i64 = (token1ForToken2 == exact_input) ? ((amountSpecified as i64) - state_amountSpecifiedRemaining) : state_amountCalculated;
+        let amount2: i64 = (token1ForToken2 == exact_input) ? state_amountCalculated : ((amountSpecified as i64) - state_amountSpecifiedRemaining);
 
         let extra_change_out: u128 = 0u128;
         let extra_change_in: u128 = 0u128;
-        if (zeroForOne) {
+        if (token1ForToken2) {
             // amount1 is amount_in
             // amount2 amount_out
             if (amount2 < 0i64) {
@@ -1241,13 +1241,13 @@ program arcane_amm_v3_3.aleo {
                 sqrt_price_x32: u128,
                 liquidity: u128,
                 amountIn: u128,
-                zeroForOne: bool
+                token1ForToken2: bool
             ) -> u128 {
                 assert(sqrt_price_x32 > 0u128);
                 assert(liquidity > 0u128);
 
                 // round to make sure that we don't pass the target sqrt_price_x32
-                return zeroForOne
+                return token1ForToken2
                         ? getNextSqrtPriceFromAmount0(sqrt_price_x32, liquidity, amountIn, true)
                         : getNextSqrtPriceFromAmount1RoundingDown(sqrt_price_x32, liquidity, amountIn, true);
         }
@@ -1256,13 +1256,13 @@ program arcane_amm_v3_3.aleo {
                 sqrt_price_x32: u128,
                 liquidity: u128,
                 amountOut: u128,
-                zeroForOne: bool
+                token1ForToken2: bool
             ) -> u128 {
                 assert(sqrt_price_x32 > 0u128);
                 assert(liquidity > 0u128);
 
                 // round to make sure that we pass the target sqrt_price_x32
-                return zeroForOne
+                return token1ForToken2
                         ? getNextSqrtPriceFromAmount1RoundingDown(sqrt_price_x32, liquidity, amountOut, false)
                         : getNextSqrtPriceFromAmount0(sqrt_price_x32, liquidity, amountOut, false);
             }
@@ -1702,12 +1702,12 @@ program arcane_amm_v3_3.aleo {
         let amountOut: u128 = 0u128;
         let feeAmount: u128 = 0u128;
 
-        let zeroForOne: bool = price_current >= price_target;
+        let token1ForToken2: bool = price_current >= price_target;
         let exactIn: bool = amountRemaining >= 0i64;
 
         if (exactIn) {
             let amountRemainingLessFee: u128 = mul_div(amountRemaining.abs() as u128, 10000u128 - feePips, 10000u128);
-            amountIn = zeroForOne
+            amountIn = token1ForToken2
                 ? getAmount0Delta_roundUp(price_target, price_current, liquidity, true)
                 : getAmount1Delta_roundUp(price_current, price_target, liquidity, true);
             if (amountRemainingLessFee >= amountIn) {
@@ -1717,11 +1717,11 @@ program arcane_amm_v3_3.aleo {
                     price_current,
                     liquidity,
                     amountRemainingLessFee,
-                    zeroForOne
+                    token1ForToken2
                 );
             }
         } else {
-            amountOut = zeroForOne
+            amountOut = token1ForToken2
                 ? getAmount1Delta_roundUp(price_target, price_current, liquidity, false)
                 : getAmount0Delta_roundUp(price_current, price_target, liquidity, false);
             if (((amountRemaining.abs()) as u128) >= amountOut) {
@@ -1731,7 +1731,7 @@ program arcane_amm_v3_3.aleo {
                     price_current,
                     liquidity,
                     ((amountRemaining.abs()) as u128),
-                    zeroForOne
+                    token1ForToken2
                 );
             }
         }
@@ -1739,7 +1739,7 @@ program arcane_amm_v3_3.aleo {
         let max: bool = price_target == price_next;
 
         // get the input/output amounts
-        if (zeroForOne) {
+        if (token1ForToken2) {
             amountIn = (max && exactIn)
                 ? amountIn
                 : getAmount0Delta_roundUp(price_next, price_current, liquidity, true);
