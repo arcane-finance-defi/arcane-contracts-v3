@@ -1,5 +1,5 @@
-import arcanetoken.leo;
-import arcaneutil.leo;
+import arcanetoken.aleo;
+import arcaneutil.aleo;
 
 program arcane_amm_v3_6.aleo {
 
@@ -10,7 +10,7 @@ program arcane_amm_v3_6.aleo {
     const MAX_TICK: u32 = 24u32;
 
     transition get_program_address() -> address {
-        return arcaneutil.leo/get_caller_address();
+        return arcaneutil.aleo/get_caller_address();
     }
 
     transition get_pool_key_transition(id1: u64, id2: u64) -> field {
@@ -188,18 +188,18 @@ program arcane_amm_v3_6.aleo {
                                tick_lower: u32,
                                tick_upper: u32,
                                liquidity: u64, // sqrt (amount1 * amount2)
-                               token1: arcanetoken.leo/ArcaneToken,
+                               token1: arcanetoken.aleo/ArcaneToken,
                                token1_amount: u128,
                                extra_voucher_1: field,
-                               token2: arcanetoken.leo/ArcaneToken,
+                               token2: arcanetoken.aleo/ArcaneToken,
                                token2_amount: u128,
-                               extra_voucher_2: field) -> (arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken, PositionReceipt, ExtraAmountVoucher, ExtraAmountVoucher) {
+                               extra_voucher_2: field) -> (arcanetoken.aleo/ArcaneToken, arcanetoken.aleo/ArcaneToken, PositionReceipt, ExtraAmountVoucher, ExtraAmountVoucher) {
         check_ticks(tick_lower, tick_upper);
 
         let position_id: field = get_position_info_key(owner, tick_lower, tick_upper);
 
-        let token1_change_record: ArcaneToken = arcanetoken.leo/transfer_private_to_public_arc(token1, SELF_ADDRESS, token1_amount as u128);
-        let token2_change_record: ArcaneToken = arcanetoken.leo/transfer_private_to_public_arc(token2, SELF_ADDRESS, token2_amount as u128);
+        let token1_change_record: ArcaneToken = arcanetoken.aleo/transfer_private_to_public_arc(token1, SELF_ADDRESS, token1_amount as u128);
+        let token2_change_record: ArcaneToken = arcanetoken.aleo/transfer_private_to_public_arc(token2, SELF_ADDRESS, token2_amount as u128);
 
         let position_receipt: PositionReceipt = PositionReceipt {
             owner: owner,
@@ -368,14 +368,14 @@ program arcane_amm_v3_6.aleo {
                               tick_lower: u32,
                               tick_upper: u32,
                               position_receipt: PositionReceipt,
-                              token1: arcanetoken.leo/ArcaneToken,
+                              token1: arcanetoken.aleo/ArcaneToken,
                               token1_amount: u128,
                               extra_voucher_1: field,
-                              token2: arcanetoken.leo/ArcaneToken,
+                              token2: arcanetoken.aleo/ArcaneToken,
                               token2_amount: u128,
-                              extra_voucher_2: field) -> (arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken, ExtraAmountVoucher, ExtraAmountVoucher) {
-        let token1_change_record: ArcaneToken = arcanetoken.leo/transfer_public_to_private_arc(token1.token_id, receiver, token1_amount as u128);
-        let token2_change_record: ArcaneToken = arcanetoken.leo/transfer_public_to_private_arc(token2.token_id, receiver, token2_amount as u128);
+                              extra_voucher_2: field) -> (arcanetoken.aleo/ArcaneToken, arcanetoken.aleo/ArcaneToken, ExtraAmountVoucher, ExtraAmountVoucher) {
+        let token1_change_record: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(token1.token_id, receiver, token1_amount as u128);
+        let token2_change_record: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(token2.token_id, receiver, token2_amount as u128);
 
         // user can get change using this voucher if amount_in is less than actual amount they could swap
         let extra_amount_voucher_1: ExtraAmountVoucher = ExtraAmountVoucher {
@@ -501,12 +501,11 @@ program arcane_amm_v3_6.aleo {
         });
     }
 
-
-    transition swap(exact_input: bool, receiver: address, token_in: arcanetoken.leo/ArcaneToken, amount_in: u128, token_out_id: u64, amount_out: u128, price_limit: u128, extra_voucher_in: field, extra_voucher_out: field) -> (arcanetoken.leo/ArcaneToken, arcanetoken.leo/ArcaneToken, ExtraAmountVoucher, ExtraAmountVoucher) {
+    transition swap(exact_input: bool, receiver: address, token_in: arcanetoken.aleo/ArcaneToken, amount_in: u128, token_out_id: u64, amount_out: u128, price_limit: u128, extra_voucher_in: field, extra_voucher_out: field) -> (arcanetoken.aleo/ArcaneToken, arcanetoken.aleo/ArcaneToken, ExtraAmountVoucher, ExtraAmountVoucher) {
         assert(amount_out > 0u128);
 
-        let change: ArcaneToken = arcanetoken.leo/transfer_private_to_public_arc(token_in, SELF_ADDRESS, amount_in as u128);
-        let token_out: ArcaneToken = arcanetoken.leo/transfer_public_to_private_arc(token_out_id, receiver, amount_out as u128);
+        let change: ArcaneToken = arcanetoken.aleo/transfer_private_to_public_arc(token_in, SELF_ADDRESS, amount_in as u128);
+        let token_out: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(token_out_id, receiver, amount_out as u128);
 
         // user can get change using this voucher if amount_in is less than actual amount they could swap
         let extra_amount_voucher_in: ExtraAmountVoucher = ExtraAmountVoucher {
@@ -573,15 +572,8 @@ program arcane_amm_v3_6.aleo {
 
             let pool_tick_key: field = get_pool_tick_key(pool_meta.token1_id, pool_meta.token2_id, tick_to_check);
             let tick_initialized: bool = Mapping::get_or_use(map_tick_initialized, pool_tick_key, false);
-            if (tick_initialized && !found_initialized_tick) {
-                found_initialized_tick = true;
-                step_tickNext = tick_to_check;
-                step_initialized = true;
-            }
-            if (!found_initialized_tick) {
-                step_tickNext = tick_to_check;
-                step_initialized = false;
-            }
+            step_tickNext = tick_to_check;
+            step_initialized = tick_initialized;
 
             // ensure that we do not overshoot the min/max tick, as the tick bitmap is not aware of these bounds
             if (step_tickNext < MIN_TICK) {
@@ -625,7 +617,7 @@ program arcane_amm_v3_6.aleo {
 
             // if the protocol fee is on, calculate how much is owed, decrement feeAmount, and increment protocolFee
             if (protocol_fee > 0u128) {
-                let delta: u128 = step_feeAmount / protocol_fee; // delta goes to protocol
+                let delta: u128 = step_feeAmount.div(protocol_fee); // delta goes to protocol
                 step_feeAmount = step_feeAmount - delta;
                 state_protocolFee = state_protocolFee + delta;
             }
@@ -757,8 +749,8 @@ program arcane_amm_v3_6.aleo {
         Mapping::set(map_extra_voucher, extra_change_voucher_in, extra_amount_in);
     }
 
-    transition redeem_voucher(voucher: ExtraAmountVoucher, amount: u128) -> (arcanetoken.leo/ArcaneToken) {
-        let token: ArcaneToken = arcanetoken.leo/transfer_public_to_private_arc(voucher.token_id, voucher.owner, amount);
+    transition redeem_voucher(voucher: ExtraAmountVoucher, amount: u128) -> (arcanetoken.aleo/ArcaneToken) {
+        let token: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(voucher.token_id, voucher.owner, amount);
         return token then finalize(voucher.token_id, voucher.voucher, amount);
     }
 
@@ -1174,26 +1166,23 @@ program arcane_amm_v3_6.aleo {
         // we short circuit amount == 0 because the result is otherwise not guaranteed to equal the input sqrt_price_x32
         if (amount == 0u128) {
             return sqrt_price_x32;
-        }
-        let numerator1: u128 = liquidity.shl(Q32_RESOLUTION);
-
-        if (add) {
-            let product: u128 = (amount * sqrt_price_x32) / amount;
-            if (product == sqrt_price_x32) {
-                let denominator: u128 = numerator1 + product;
-                if (denominator >= numerator1) {
-                    return mul_div_rounding_up(numerator1, sqrt_price_x32, denominator);
-                }
-            }
-            return div_rounding_up(numerator1, (numerator1 / sqrt_price_x32).add(amount));
         } else {
-            let product: u128 = amount * sqrt_price_x32;
-            // if the product overflows, we know the denominator underflows
-            // in addition, we must check that the denominator does not underflow
-            assert((product / amount) == sqrt_price_x32);
-            assert(numerator1 > product);
-            let denominator: u128 = numerator1 - product;
-            return mul_div_rounding_up(numerator1, sqrt_price_x32, denominator);
+            let numerator1: u128 = liquidity.shl(Q32_RESOLUTION);
+
+            if (add) {
+//                 let product: u128 = (amount.mul(sqrt_price_x32)).div(amount);
+//                 if (product == sqrt_price_x32) {
+//                     let denominator: u128 = numerator1 + product;
+//                     if (denominator >= numerator1) {
+//                         return mul_div_rounding_up(numerator1, sqrt_price_x32, denominator);
+//                     }
+//                 } leads to div by zero
+                return div_rounding_up(numerator1, (numerator1.div(sqrt_price_x32)).add(amount));
+            } else {
+                let product: u128 = amount * sqrt_price_x32;
+                let denominator: u128 = numerator1 - product;
+                return mul_div_rounding_up(numerator1, sqrt_price_x32, denominator);
+            }
         }
     }
 
@@ -1209,7 +1198,7 @@ program arcane_amm_v3_6.aleo {
                 let quotient: u128 =
                     (
                         amount <= U32_MAX
-                            ? amount.shl(Q32_RESOLUTION) / liquidity
+                            ? (amount.shl(Q32_RESOLUTION)).div(liquidity)
                             : mul_div(amount, FP_Q32, liquidity)
                     );
                 return sqrt_price_x32 + quotient;
@@ -1237,6 +1226,15 @@ program arcane_amm_v3_6.aleo {
             );
         }
 
+        transition test_get_next_price_zero() -> u128 {
+            return getNextSqrtPriceFromInput(
+                4219135934u128,
+                12345678u128,
+                0u128,
+                true
+            );
+        }
+
         inline getNextSqrtPriceFromInput(
                 sqrt_price_x32: u128,
                 liquidity: u128,
@@ -1246,10 +1244,13 @@ program arcane_amm_v3_6.aleo {
                 assert(sqrt_price_x32 > 0u128);
                 assert(liquidity > 0u128);
 
+                let zeroIn: bool = amountIn == 0u128;
+
                 // round to make sure that we don't pass the target sqrt_price_x32
-                return token1ForToken2
-                        ? getNextSqrtPriceFromAmount0(sqrt_price_x32, liquidity, amountIn, true)
-                        : getNextSqrtPriceFromAmount1RoundingDown(sqrt_price_x32, liquidity, amountIn, true);
+                return zeroIn ? sqrt_price_x32 :
+                    (token1ForToken2 ? getNextSqrtPriceFromAmount0(sqrt_price_x32, liquidity, amountIn, true) :
+                        getNextSqrtPriceFromAmount1RoundingDown(sqrt_price_x32, liquidity, amountIn, true)
+                    );
         }
 
         inline getNextSqrtPriceFromOutput(
@@ -1290,7 +1291,7 @@ program arcane_amm_v3_6.aleo {
                             mul_div_rounding_up(numerator1, numerator2, price_b),
                             price_a
                         )
-                        : mul_div(numerator1, numerator2, price_b) / price_a;
+                        : mul_div(numerator1, numerator2, price_b).div(price_a);
             }
 
         inline getAmount1Delta_roundUp(

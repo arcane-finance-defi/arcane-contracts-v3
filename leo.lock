@@ -1,0 +1,13 @@
+[[package]]
+name = "arcaneutil"
+location = "local"
+path = "dependencies/arcaneutil/"
+checksum = "f0c53445011de10a17400299f311cbd66b6704e0111335f74ef727f97af21d95"
+dependencies = []
+
+[[package]]
+name = "arcanetoken"
+location = "local"
+path = "dependencies/arcanetoken/"
+checksum = "faebeed305858c4254a642c6521185580cb142417c5a9ed8d2a925388ac2b16f"
+dependencies = []
