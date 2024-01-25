@@ -1801,7 +1801,7 @@ program arcane_amm_v3_0.aleo {
         return debug_swap(true, 2u64, 9000u128, 1u64, 9000u128, 4463460944u128, 1001field, 2001field);
     }
 
-    inline debug_swap(exact_input: bool, token_in_id: u64, amount_in: u128, token_out_id: u64, amount_out: u128, price_limit: u128, extra_change_voucher_in: field, extra_change_voucher_out: field) -> (PoolState, ExtraAmount, ExtraAmount, i64, i64, i64) {
+    inline test_swap(exact_input: bool, token_in_id: u64, amount_in: u128, token_out_id: u64, amount_out: u128, price_limit: u128, extra_change_voucher_in: field, extra_change_voucher_out: field) -> (PoolState, ExtraAmount, ExtraAmount, i64, i64, i64) {
         let pool_key: field = get_pool_key(token_in_id, token_out_id);
 
         let tick: u32 = 11u32;
