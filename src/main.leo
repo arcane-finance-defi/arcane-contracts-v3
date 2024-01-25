@@ -236,14 +236,11 @@ program arcane_amm_v3_0.aleo {
         token2_amount: u128,
         extra_amount_voucher_1: field,
         extra_amount_voucher_2: field) {
-//         assert(!Mapping::contains(map_position, position_id));
+        assert(!Mapping::contains(map_position, position_id));
 
         let pool_key: field = get_pool_key(token1_id, token2_id);
         let pool_meta: PoolMeta = Mapping::get(map_pool_meta, pool_key);
         let pool_state: PoolState = Mapping::get(map_pool_state, pool_key);
-
-//         assert(pool_meta.token1_id == token1_id);
-//         assert(pool_meta.token2_id == token2_id);
 
         let empty_tick_lower_info: TickInfo = empty_tick_info();
         let lower_tick_key: field = get_pool_tick_key(token1_id, token2_id, tick_lower);
@@ -269,14 +266,9 @@ program arcane_amm_v3_0.aleo {
 
         let token1_amount_actual: u128 = result.token1_amount.abs() as u128;
         let token2_amount_actual: u128 = result.token2_amount.abs() as u128;
-//         if (token1_amount == 0u128) {
-//             assert(token1_amount_actual == 0u128);
-//         }
-//         if (token2_amount == 0u128) {
-//             assert(token2_amount_actual == 0u128);
-//         }
-//         assert(token1_amount_actual <= token1_amount);
-//         assert(token2_amount_actual <= token2_amount);
+
+        assert(token1_amount_actual <= token1_amount);
+        assert(token2_amount_actual <= token2_amount);
 
         let extra_change_1: u128 = token1_amount - token1_amount_actual;
         let extra_amount_1: ExtraAmount = ExtraAmount {
@@ -364,41 +356,87 @@ program arcane_amm_v3_0.aleo {
         return result.token1_amount;
     }
 
-    transition close_position(receiver: address,
+    transition test_modify_position_zero() -> (i64, i64) {
+            let tick_prices: [u128; 24] = [3593427452u128,4085866296u128,4108378126u128,4130767274u128,4153035722u128,4175185403u128,4197218197u128,4219135934u128,4240940399u128,4262633331u128,4284216422u128,4305691326u128,4327059652u128,4348322973u128,4369482820u128,4390540691u128,4411498045u128,4432356308u128,4453116872u128,4473781099u128,4494350316u128,4514825822u128,4535208886u128,4915814758u128];
+            let tick_price_ranges: [u128; 25] = [3037000500u128,4074563739u128,4097137672u128,4119587910u128,4141916463u128,4164125290u128,4186216295u128,4208191335u128,4230052216u128,4251800700u128,4273438502u128,4294967296u128,4316388712u128,4337704342u128,4358915736u128,4380024411u128,4401031842u128,4421939475u128,4442748717u128,4463460944u128,4484077502u128,4504599703u128,4525028831u128,4545366142u128,5260239169u128];
+
+            let pool_meta: PoolMeta = PoolMeta {
+                id: 4192939143489893958183065211448386508130081772115300972806275416853025311330field,
+                token1_id: 1u64,
+                token2_id: 2u64,
+                tick_prices: tick_prices,
+                tick_price_ranges: tick_price_ranges,
+                swap_fee: 100u128,
+                protocol_fee: 4u128,
+                max_liq_per_tick: U32_MAX
+            };
+
+            let sqrt_price_x32: u128 = get_price_by_tick(8u32, tick_prices);
+
+            let pool_state: PoolState = PoolState {
+                tick: 8u32,
+                sqrt_price_x32: sqrt_price_x32,
+                liquidity: 0u128,
+                t1_protocol_fees: 0u128,
+                t2_protocol_fees: 0u128,
+                fee_growth_global_1: 0u128,
+                fee_growth_global_2: 0u128
+            };
+            let params: ModifyPositionParams = ModifyPositionParams {
+                    orig_position: empty_position_info(),
+                    tick_lower: 8u32,
+                    tick_upper: 14u32,
+                    lower_tick_info: empty_tick_info(),
+                    upper_tick_info: empty_tick_info(),
+                    liquidity_delta: 0i64,
+                    pool_meta: pool_meta,
+                    pool_state: pool_state,
+            };
+            let result: ModifyPositionResult = modify_position(params);
+
+        assert(result.token1_amount == 0i64);
+        assert(result.token2_amount == 0i64);
+
+        return (result.token1_amount,result.token2_amount);
+    }
+
+    transition burn_liquidity(receiver: address,
                               tick_lower: u32,
                               tick_upper: u32,
+                              liquidity: u64, // sqrt (amount1 * amount2)
                               position_receipt: PositionReceipt,
-                              token1: arcanetoken.aleo/ArcaneToken,
+                              token1_id: u64,
                               token1_amount: u128,
                               extra_voucher_1: field,
-                              token2: arcanetoken.aleo/ArcaneToken,
+                              token2_id: u64,
                               token2_amount: u128,
                               extra_voucher_2: field) -> (arcanetoken.aleo/ArcaneToken, arcanetoken.aleo/ArcaneToken, ExtraAmountVoucher, ExtraAmountVoucher) {
-        let token1_change_record: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(token1.token_id, receiver, token1_amount as u128);
-        let token2_change_record: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(token2.token_id, receiver, token2_amount as u128);
+        let token1_change_record: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(token1_id, receiver, token1_amount as u128);
+        let token2_change_record: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(token2_id, receiver, token2_amount as u128);
 
         // user can get change using this voucher if amount_in is less than actual amount they could swap
         let extra_amount_voucher_1: ExtraAmountVoucher = ExtraAmountVoucher {
             owner: receiver,
-            token_id: token1.token_id,
+            token_id: token1_id,
             voucher: extra_voucher_1
         };
 
         // user can get change using this voucher if amount_out is less than actual amount they could receive according to AMM math
         let extra_amount_voucher_2: ExtraAmountVoucher = ExtraAmountVoucher {
             owner: receiver,
-            token_id: token2.token_id,
+            token_id: token2_id,
             voucher: extra_voucher_2
         };
 
         let position_id: field = position_receipt.position_id;
-        return (token1_change_record, token2_change_record, extra_amount_voucher_1, extra_amount_voucher_2) then finalize(position_id, tick_lower, tick_upper, token1.token_id, token1_amount, token2.token_id, token2_amount, extra_voucher_1, extra_voucher_2);
+        return (token1_change_record, token2_change_record, extra_amount_voucher_1, extra_amount_voucher_2) then finalize(position_id, tick_lower, tick_upper, liquidity, token1_id, token1_amount, token2_id, token2_amount, extra_voucher_1, extra_voucher_2);
     }
 
-    finalize close_position(
+    finalize burn_liquidity(
         position_id: field,
         tick_lower: u32,
         tick_upper: u32,
+        liquidity: u64, // sqrt (amount1 * amount2)
         token1_id: u64,
         token1_amount: u128,
         token2_id: u64,
@@ -424,14 +462,7 @@ program arcane_amm_v3_0.aleo {
         let upper_tick_key: field = get_pool_tick_key(token1_id, token2_id, tick_upper);
         let upper_tick_info: TickInfo = Mapping::get_or_use(map_tick_info, upper_tick_key, empty_upper_tick_info);
 
-        let liquidity_delta: i64 = 0i64;
-        if (token1_amount != 0u128 && token2_amount != 0u128) {
-            liquidity_delta = ((token1_amount * token2_amount) as i64).neg();
-        } else if (token1_amount == 0u128) {
-            liquidity_delta = (token2_amount as i64).neg();
-        } else {
-            liquidity_delta = (token1_amount as i64).neg();
-        }
+        let liquidity_delta: i64 = (liquidity as i64).neg();
 
         let params: ModifyPositionParams = ModifyPositionParams {
                 orig_position: position_info,
@@ -447,12 +478,7 @@ program arcane_amm_v3_0.aleo {
 
         let token1_amount_actual: u128 = result.token1_amount.abs() as u128;
         let token2_amount_actual: u128 = result.token2_amount.abs() as u128;
-        if (token1_amount == 0u128) {
-            assert(token1_amount_actual == 0u128);
-        }
-        if (token2_amount == 0u128) {
-            assert(token2_amount_actual == 0u128);
-        }
+
         assert(token1_amount_actual >= token1_amount);
         assert(token2_amount_actual >= token2_amount);
 
@@ -501,6 +527,43 @@ program arcane_amm_v3_0.aleo {
         });
     }
 
+    transition collect_fees(position_receipt: PositionReceipt,
+                              token1_amount: u128,
+                              token2_amount: u128) -> (arcanetoken.aleo/ArcaneToken, arcanetoken.aleo/ArcaneToken) {
+        let token1_change_record: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(position_receipt.token1_id, position_receipt.owner, token1_amount as u128);
+        let token2_change_record: ArcaneToken = arcanetoken.aleo/transfer_public_to_private_arc(position_receipt.token2_id, position_receipt.owner, token2_amount as u128);
+
+        let position_id: field = position_receipt.position_id;
+        return (token1_change_record, token2_change_record) then finalize(position_id, token1_amount, token2_amount);
+    }
+
+    finalize collect_fees(
+        position_id: field,
+        token1_amount: u128,
+        token2_amount: u128) {
+        assert(Mapping::contains(map_position, position_id));
+
+        let position_info: PositionInfo = Mapping::get(map_position, position_id);
+
+        let t1_owed: u128 = position_info.tokens_owed_1;
+        let t2_owed: u128 = position_info.tokens_owed_2;
+
+        assert(t1_owed >= token1_amount);
+        assert(t2_owed >= token2_amount);
+
+        let t1_owed_modified: u128 = t1_owed - token1_amount;
+        let t2_owed_modified: u128 = t2_owed - token2_amount;
+
+        let position_modified: PositionInfo = PositionInfo {
+                liquidity: position_info.liquidity,
+                fee_growth_inside_1_last: position_info.fee_growth_inside_1_last,
+                fee_growth_inside_2_last: position_info.fee_growth_inside_2_last,
+                tokens_owed_1: t1_owed_modified,
+                tokens_owed_2: t2_owed_modified,
+        };
+        Mapping::set(map_position, position_id, position_modified);
+    }
+    
     transition swap(exact_input: bool, receiver: address, token_in: arcanetoken.aleo/ArcaneToken, amount_in: u128, token_out_id: u64, amount_out: u128, price_limit: u128, extra_voucher_in: field, extra_voucher_out: field) -> (arcanetoken.aleo/ArcaneToken, arcanetoken.aleo/ArcaneToken, ExtraAmountVoucher, ExtraAmountVoucher) {
         assert(amount_out > 0u128);
 
@@ -730,6 +793,9 @@ program arcane_amm_v3_0.aleo {
             extra_change_in = (amount_in as i128) - amount2_abs;
         }
 
+        assert(extra_change_out >= 0i128);
+        assert(extra_change_in >= 0i128);
+
         let extra_change_out_final: u128 = extra_change_out < 0i128 ? 0u128 : extra_change_out.abs() as u128;
         let extra_amount_out: ExtraAmount = ExtraAmount {
                             token_id: token_out_id,
@@ -829,8 +895,8 @@ program arcane_amm_v3_0.aleo {
         liquidity: u128,
         fee_growth_inside_1_last: u128,
         fee_growth_inside_2_last: u128,
-        tokensOwed0: u128,
-        tokensOwed1: u128,
+        tokens_owed_1: u128,
+        tokens_owed_2: u128,
     }
 
     struct PositionInfoKey {
@@ -920,8 +986,8 @@ program arcane_amm_v3_0.aleo {
             liquidity: 0u128,
             fee_growth_inside_1_last: 0u128,
             fee_growth_inside_2_last: 0u128,
-            tokensOwed0: 0u128,
-            tokensOwed1: 0u128,
+            tokens_owed_1: 0u128,
+            tokens_owed_2: 0u128,
        };
     }
 
@@ -1127,13 +1193,13 @@ program arcane_amm_v3_0.aleo {
              let ld: u128 =  lm_add_delta(liq_i64, liquidity_delta);
              liquidityNext = ld;
 
-             let tokensOwed0: u128 =
+             let tokens_owed_1: u128 =
                      mul_div(
                          fee_growth_inside_1 - positionInfo.fee_growth_inside_1_last,
                          positionInfo.liquidity,
                          FP_Q32
                      );
-             let tokensOwed1: u128 =
+             let tokens_owed_2: u128 =
                      mul_div(
                          fee_growth_inside_2 - positionInfo.fee_growth_inside_2_last,
                          positionInfo.liquidity,
@@ -1143,8 +1209,8 @@ program arcane_amm_v3_0.aleo {
                 liquidity: liquidityNext,
                 fee_growth_inside_1_last: fee_growth_inside_1,
                 fee_growth_inside_2_last: fee_growth_inside_2,
-                tokensOwed0: positionInfo.tokensOwed0 + tokensOwed0,
-                tokensOwed1: positionInfo.tokensOwed1 + tokensOwed1,
+                tokens_owed_1: positionInfo.tokens_owed_1 + tokens_owed_1,
+                tokens_owed_2: positionInfo.tokens_owed_2 + tokens_owed_2,
              };
     }
 
@@ -1794,11 +1860,11 @@ program arcane_amm_v3_0.aleo {
 
 
     transition test_swap_1_2() -> (PoolState, ExtraAmount, ExtraAmount, i64, i64, i64) {
-        return debug_swap(true, 1u64, 10000u128, 2u64, 9000u128, 4141916463u128, 1001field, 2001field);
+        return test_swap(true, 1u64, 10000u128, 2u64, 9000u128, 4141916463u128, 1001field, 2001field);
     }
 
     transition test_swap_2_1() -> (PoolState, ExtraAmount, ExtraAmount, i64, i64, i64) {
-        return debug_swap(true, 2u64, 9000u128, 1u64, 9000u128, 4463460944u128, 1001field, 2001field);
+        return test_swap(true, 2u64, 9000u128, 1u64, 9000u128, 4463460944u128, 1001field, 2001field);
     }
 
     inline test_swap(exact_input: bool, token_in_id: u64, amount_in: u128, token_out_id: u64, amount_out: u128, price_limit: u128, extra_change_voucher_in: field, extra_change_voucher_out: field) -> (PoolState, ExtraAmount, ExtraAmount, i64, i64, i64) {
@@ -2036,6 +2102,9 @@ program arcane_amm_v3_0.aleo {
             let amount2_abs: i128 = amount2.abs() as i128;
             extra_change_in = (amount_in as i128) - amount2_abs;
         }
+
+        assert(extra_change_out >= 0i128);
+        assert(extra_change_in >= 0i128);
 
         let extra_change_out_final: u128 = extra_change_out < 0i128 ? 0u128 : extra_change_out.abs() as u128;
         let extra_amount_out: ExtraAmount = ExtraAmount {
