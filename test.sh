@@ -15,4 +15,4 @@ leo run test_compute_swap_step_neg
 leo run test_swap_1_2
 leo run test_swap_2_1
 leo run test_modify_position
-leo run test_modify_position_zero_liquidity
+leo run test_modify_position_zero
